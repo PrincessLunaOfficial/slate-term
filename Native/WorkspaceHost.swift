@@ -963,6 +963,9 @@ final class WorkspaceHost: NSObject, NSWindowDelegate, NSMenuDelegate, NSMenuIte
             throw RPCFailure(code: -32602, message: "Operation handles accept only the expectedInstanceId guard, not live-pane guards")
         }
         if contract == .terminalFrame { _ = try TerminalFrameRequest(params) }
+        if let action = TerminalInteractionRequest.Action(rawValue: String(method.dropFirst("terminal.".count))), contract?.family == .terminal {
+            _ = try TerminalInteractionRequest(action: action, params: params)
+        }
         try validateAPIGuards(params, method: method)
         let client = caller ?? AutomationCaller(origin: .administrative, audience: operations.administrativeAudience)
         let operation = try suppliedOperation ?? client.admit(method, metadata: metadata, through: operations)
@@ -1093,6 +1096,12 @@ final class WorkspaceHost: NSObject, NSWindowDelegate, NSMenuDelegate, NSMenuIte
         if contract == .terminalFrame {
             let request = try TerminalFrameRequest(params)
             return try await terminalControl.frame(request, validateCaller: {
+                try operation.validateCaller()
+                try self.validateAPIGuards(params, method: method)
+            })
+        }
+        if let action = TerminalInteractionRequest.Action(rawValue: String(method.dropFirst("terminal.".count))), contract?.family == .terminal {
+            return try terminalControl.interact(TerminalInteractionRequest(action: action, params: params), validateCaller: {
                 try operation.validateCaller()
                 try self.validateAPIGuards(params, method: method)
             })
@@ -1628,7 +1637,7 @@ final class WorkspaceHost: NSObject, NSWindowDelegate, NSMenuDelegate, NSMenuIte
         case .notificationsPost, .notificationsList, .notificationsDismiss, .notificationsStatus,
              .layoutConfiguration, .contextInspect, .settingsGet, .pluginDataGet, .pluginDataPatch, .pluginDataReset,
              .panelStateGet, .panelStatePatch, .panelStateReset, .paneTitle,
-             .terminalSend, .terminalKey, .terminalCapture, .terminalFrame, .terminalRun, .terminalWait, .terminalStart, .terminalSearch,
+             .terminalSend, .terminalKey, .terminalCapture, .terminalFrame, .terminalScroll, .terminalPointer, .terminalSelection, .terminalRun, .terminalWait, .terminalStart, .terminalSearch,
              .terminalOperations, .terminalOperationStatus, .terminalOperationResult, .terminalOperationWait,
              .eventsHead, .eventsPoll, .eventsEmit, .pluginsRestart,
              .webGet, .webSnapshot, .webClick, .webFill, .webSelect, .webScroll, .webWait, .webFocus, .webKey, .webCheck, .webSetValue, .webDialog, .webRespondDialog, .webFileChooser, .webChooseFiles, .webCancelFileChooser, .webScreenshot,

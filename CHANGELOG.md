@@ -6,6 +6,8 @@ Detailed change record for agents and maintainers. Public release notes live in 
 
 ### Added
 
+- Add explicit pane/session/app-guarded `terminal.scroll`, atomic left-button `terminal.pointer` move/click/drag, and bounded `terminal.selection` reads across the shared catalog, CLI, page bridge and services. Wheel/pointer input checks exact frame geometry and physical mouse contention before dispatch, releases every synthetic press synchronously and restores modifier state. Selection reads do not access the Mac clipboard and fail above 128 KiB rather than truncate. Native pointer bindings, mouse capture and configured copy-on-select retain their normal behavior; no implicit pane focus or PTY resize is added. All 562 package tests and native build pass; actual native input/selection and lock behavior remain pending the extended VM-only fixture.
+
 - Add guarded `terminal.frame` across the shared catalog, CLI, registered page bridge and services. An explicit pane/session/app epoch yields an original-resolution Display P3 PNG from a fresh GPU render of the native terminal viewport. The bounded Ghostty request copies completed BGRA bytes before buffer reuse, handles cancellation without aliasing later requests, and drives rendering independently of display-link pacing. It does not capture AppKit chrome, change focus/PTY size or use screen-recording APIs; unavailable/oversized/changed frames fail explicitly. Package/CLI/pixel round-trip tests pass; actual native fidelity, locked-Mac behavior and lifecycle races remain pending VM verification.
 
 ### Changed

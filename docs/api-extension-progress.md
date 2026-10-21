@@ -1,5 +1,32 @@
 # API extension implementation progress
 
+## Guarded terminal interaction — implemented; native verification pending
+
+Added `terminal.scroll`, `terminal.pointer` and `terminal.selection` to the shared
+catalog, CLI, registered page aliases and service dispatch. Each requires explicit
+pane/session/app identity. Pointer/wheel input additionally validates the current
+frame's exact point/pixel geometry and finite in-bounds points before native input.
+Click/drag owns press/release synchronously; physical buttons held reject input.
+A pure gesture test proves release precedes cleanup even after a movement failure.
+The native adapter reuses the AppKit input's Ghostty dispatch helpers without
+implicitly focusing or resizing. A regression covers Ghostty's unchanged-position
+modifier suppression so physical Shift cannot leak into modifier-free wheel input.
+Selection reads free native text on every exit and reject UTF-8 above 128 KiB,
+without reading/writing the Mac clipboard or truncating the result. Native pointer
+bindings, configured copy-on-select and terminal mouse modes remain native behavior.
+
+RED: on baseline `faba614fa246c95459d1a4a07eddf2ab47192b81`,
+`swift test --jobs 4 --filter terminalInteractionCatalogRequiresIdentityAndGeometryWithoutDefaults`
+exited 1 because `terminal.scroll` was absent. The same assertions passed after
+implementation. All 562 package tests passed, covering input bounds/unknown fields,
+geometry-before-dispatch, atomic release/cleanup, stale physical modifiers, bounded
+selection/result schemas, no inherited targets and CLI/page catalog aliases. The
+native app build passed. A read-only engine/native-source audit found and verified
+the modifier cleanup fix. Python syntax validation passed for the expanded VM-only
+`terminal-frame` fixture, but that fixture has **not run**. Actual scrolling,
+selection, pointer effects, physical-mouse contention and locked-Mac behavior remain
+pending native evidence. No running app/windows were restarted or given input.
+
 ## Terminal frame bridge — implemented; native verification pending
 
 Branch `feature/ironclaw-presentation` adds the authoritative `terminal.frame`

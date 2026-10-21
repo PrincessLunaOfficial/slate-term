@@ -120,3 +120,9 @@ through web or browser operations; closed IDs never fall back to the root view.
 It is available to CLI, socket, registered page and service clients through the
 same catalog. Read [authoritative terminal frames](automation.md#authoritative-terminal-frames)
 for identities, PNG bounds, freshness and resource availability.
+
+`terminal.scroll`, `terminal.pointer` and `terminal.selection` extend this explicit
+identity contract with bounded native wheel/atomic left-pointer gestures and a
+clipboard-independent selection read. Mutations require the current frame's point
+and pixel geometry. See [guarded terminal interaction](automation.md#guarded-terminal-pointer-wheel-and-selection)
+for native application side effects, coordinate conversion and uncertain outcomes.

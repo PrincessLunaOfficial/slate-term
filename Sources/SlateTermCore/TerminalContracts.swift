@@ -86,6 +86,52 @@ extension AutomationContracts {
                 "deadlineMilliseconds": .integer(TerminalFrameLimits.timeoutMilliseconds),
                 "overlap": .string("oneCapturePerTerminalBusyFails"), "nativeChromeIncluded": .bool(false)
             ])
+        let geometry = S.object([
+            "pointWidth": S.annotated(S.number, ["exclusiveMinimum": .integer(0), "maximum": .integer(8192)]),
+            "pointHeight": S.annotated(S.number, ["exclusiveMinimum": .integer(0), "maximum": .integer(8192)]),
+            "pixelWidth": S.integer(minimum: 1, maximum: 8192), "pixelHeight": S.integer(minimum: 1, maximum: 8192)
+        ], required: ["pointWidth", "pointHeight", "pixelWidth", "pixelHeight"])
+        let point = S.object(["x": S.annotated(S.number, ["minimum": .integer(0), "exclusiveMaximum": .integer(8192)]),
+                              "y": S.annotated(S.number, ["minimum": .integer(0), "exclusiveMaximum": .integer(8192)])], required: ["x", "y"])
+        let interactionIdentity = identity.merging(["appInstanceId": S.string(minimumLength: 1)]) { _, new in new }
+        for method in [AutomationMethod.terminalScroll, .terminalPointer, .terminalSelection] {
+            let selection = method == .terminalSelection
+            var parameters: [String: JSONValue] = ["pane": S.paneID, "sessionId": S.string(minimumLength: 1, maximumUTF8Bytes: 256)]
+            var required = ["pane", "sessionId", "expectedInstanceId"]
+            var constraints: [JSONValue] = []
+            if !selection {
+                parameters["geometry"] = geometry; parameters["point"] = point
+                required += ["geometry", "point"]
+            }
+            if method == .terminalScroll {
+                parameters["deltaX"] = S.annotated(S.number, ["minimum": .integer(-100), "maximum": .integer(100)])
+                parameters["deltaY"] = parameters["deltaX"]
+                required += ["deltaX", "deltaY"]
+                constraints = [.object(["not": S.object(["deltaX": S.annotated(S.number, ["minimum": .integer(0), "maximum": .integer(0)]), "deltaY": S.annotated(S.number, ["minimum": .integer(0), "maximum": .integer(0)])], required: ["deltaX", "deltaY"], additional: true)])]
+            }
+            if method == .terminalPointer {
+                parameters["action"] = S.strings(["move", "click", "drag"]); required += ["action"]
+                parameters["to"] = point
+                parameters["modifiers"] = S.defaulted(S.annotated(S.array(S.strings(TerminalInteractionRequest.Modifier.allCases.map(\.rawValue)), maximum: 4), ["uniqueItems": .bool(true)]), .array([]))
+                constraints = [.object(["if": S.object(["action": S.constant(.string("drag"))], required: ["action"], additional: true),
+                    "then": .object(["required": .array([.string("to")])]),
+                    "else": .object(["not": .object(["required": .array([.string("to")])])])])]
+            }
+            let resultFields = interactionIdentity.merging(selection
+                ? ["hasSelection": S.boolean, "text": S.string(maximumUTF8Bytes: TerminalInteractionRequest.maximumSelectionBytes)]
+                : ["delivery": S.constant(.string("dispatched"))]) { _, new in new }
+            methods[method] = AutomationContract(parameters: parameters, required: required,
+                result: S.object(resultFields, required: Array(resultFields.keys)), guards: ["expectedInstanceId"],
+                conditions: live + [.object(["requires": .string("attachedRealizedSurface")])],
+                routing: "explicitTerminalSession", constraints: constraints, semantics: [
+                    "changesFocusOrGeometry": .bool(false), "coordinates": .string("topLeftNativePointsInsideExactFrameGeometry"),
+                    "geometryGuard": .string("exactCurrentPointAndPixelDimensions"),
+                    "pointerButton": .string("leftOnlyAtomicRelease"), "pointerModifiers": .string("nativeMouseModeSemanticsNotForcedSelection"),
+                    "scrollUnits": .string("discreteNativeWheelStepsPositiveYUp"), "delivery": .string("dispatchedNotApplicationAcknowledged"),
+                    "nativeActionSideEffects": .string("configuredBindingsLinksCopyOnSelectAndTUIInput"),
+                    "selectionClipboardAccess": .bool(false), "pointerClipboardPolicy": .string("nativeCopyOnSelectSetting"), "oversizedSelection": .string("failsNeverTruncates")
+                ])
+        }
         methods[.terminalSearch] = terminal([
             "action": S.defaulted(S.strings(TerminalSearchRequest.Action.allCases.map(\.rawValue)), .string("get")),
             "query": S.string(maximumUTF8Bytes: 4_096, pattern: "^[^\\u0000]*(?![\\s\\S])")

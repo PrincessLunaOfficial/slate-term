@@ -181,6 +181,14 @@ public enum AutomationCapabilities {
                 "maximumPixelBytes": .integer(TerminalFrameLimits.maximumPixelBytes),
                 "nativeChromeIncluded": .bool(false), "focusAndSizePreserved": .bool(true)
             ]),
+            "terminalInteraction": .object([
+                "version": .integer(1), "methods": .array(["terminal.scroll", "terminal.pointer", "terminal.selection"].map(JSONValue.string)),
+                "required": .array(["pane", "sessionId", "expectedInstanceId"].map(JSONValue.string)),
+                "geometryGuard": .string("exactCurrentPointAndPixelDimensions"),
+                "pointerActions": .array(["move", "click", "drag"].map(JSONValue.string)),
+                "maximumSelectionBytes": .integer(TerminalInteractionRequest.maximumSelectionBytes),
+                "implicitFocusOrResize": .bool(false), "selectionClipboardAccess": .bool(false)
+            ]),
             "terminalSearch": .object([
                 "version": .integer(1), "method": .string("terminal.search"),
                 "actions": .array(["get", "set", "next", "previous", "end"].map(JSONValue.string)),

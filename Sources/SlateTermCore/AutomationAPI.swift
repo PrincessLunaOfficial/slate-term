@@ -30,6 +30,7 @@ public enum AutomationMethod: String, CaseIterable, Sendable {
     case paneTitle = "pane.title"
     case terminalSend = "terminal.send", terminalKey = "terminal.key", terminalCapture = "terminal.capture"
     case terminalFrame = "terminal.frame"
+    case terminalScroll = "terminal.scroll", terminalPointer = "terminal.pointer", terminalSelection = "terminal.selection"
     case terminalSearch = "terminal.search"
     case terminalRun = "terminal.run", terminalWait = "terminal.wait", terminalStart = "terminal.start"
     case terminalOperations = "terminal.operations", terminalOperationStatus = "terminal.operationStatus"
@@ -67,7 +68,7 @@ public enum AutomationMethod: String, CaseIterable, Sendable {
              .updatesGet, .updatesShow, .updatesCheck, .updatesDownload, .updatesCancel, .updatesInstall, .updatesOpenParent: .synchronous
         case .notificationsPost, .notificationsList, .notificationsDismiss, .notificationsStatus: .notifications
         case .layoutConfiguration, .contextInspect, .settingsGet, .paneTitle: .contextual
-        case .terminalSend, .terminalKey, .terminalCapture, .terminalFrame, .terminalRun, .terminalWait, .terminalStart, .terminalSearch: .terminal
+        case .terminalSend, .terminalKey, .terminalCapture, .terminalFrame, .terminalScroll, .terminalPointer, .terminalSelection, .terminalRun, .terminalWait, .terminalStart, .terminalSearch: .terminal
         case .terminalOperations, .terminalOperationStatus, .terminalOperationResult, .terminalOperationWait: .terminalOperations
         case .pluginDataGet, .pluginDataPatch, .pluginDataReset, .panelStateGet, .panelStatePatch, .panelStateReset: .pluginPersistence
         case .browserShowDownloads, .browserDownloads, .browserDownload, .browserSaveDownload, .browserCancelDownload, .browserPopups, .browserClosePopup, .browserGet, .browserNavigate, .browserSnapshot, .browserClick, .browserFill, .browserSelect,
@@ -91,12 +92,12 @@ public enum AutomationMethod: String, CaseIterable, Sendable {
              .tabsList, .panesList, .paneInspect, .commandList, .windowList, .windowGet, .configGet, .configValidate,
              .paletteList, .appearanceGet, .welcomeGet, .skillsList, .pluginsList, .pluginsValidate, .pluginsStatus, .pluginsLogs, .pluginSettingsGet, .settingsGet, .pluginDataGet, .panelStateGet,
              .terminalOperations, .terminalOperationStatus, .terminalOperationResult, .terminalOperationWait,
-             .terminalCapture, .terminalFrame, .terminalWait, .panesCapture, .eventsHead, .eventsPoll, .webDialog, .webFileChooser, .webGet, .webSnapshot, .webWait,
+             .terminalCapture, .terminalFrame, .terminalSelection, .terminalWait, .panesCapture, .eventsHead, .eventsPoll, .webDialog, .webFileChooser, .webGet, .webSnapshot, .webWait,
              .browserDownloads, .browserDownload, .browserPopups, .browserGet, .browserSnapshot, .browserWait, .browserListData, .serviceList, .serviceStatus, .serviceLogs,
              .notificationsList, .notificationsStatus, .presenceList, .presenceHold, .presenceRelease, .updatesGet: .read
         case .layoutAppsRefresh, .layoutsCreate, .layoutsUpdate, .layoutsCapture, .layoutsOpen, .layoutsRestoreOriginal, .layoutsLauncher, .commandRun, .configReload, .configPatch, .configResetOverrides, .paletteImport, .skillsInstall, .skillsUninstall, .pluginsRegister, .pluginsUnregister, .pluginsEnable, .pluginsDisable,
              .pluginsRestart, .pluginSettingsPatch, .pluginDataPatch, .pluginDataReset, .panelStatePatch, .panelStateReset, .paneTitle, .terminalSend,
-             .terminalKey, .terminalRun, .terminalStart, .terminalSearch, .panesSend, .eventsEmit, .webClick, .webFill, .webSelect, .webScroll,
+             .terminalKey, .terminalScroll, .terminalPointer, .terminalRun, .terminalStart, .terminalSearch, .panesSend, .eventsEmit, .webClick, .webFill, .webSelect, .webScroll,
              .webFocus, .webKey, .webCheck, .webSetValue, .webRespondDialog, .webChooseFiles, .webCancelFileChooser, .webScreenshot, .browserNavigate, .browserClick, .browserFill, .browserSelect, .browserScroll,
              .browserShowDownloads, .browserSaveDownload, .browserCancelDownload, .browserClosePopup, .browserEval, .browserScreenshot, .browserClearData, .browserClearSiteData, .browserRemoveSiteData, .serviceStart,
              .notificationsPost, .notificationsDismiss, .presenceFocus, .updatesShow, .updatesCheck, .updatesDownload, .updatesCancel, .updatesInstall, .updatesOpenParent: .mutation
@@ -136,7 +137,7 @@ public enum AutomationMethod: String, CaseIterable, Sendable {
             }
         case .pluginDataGet, .pluginDataPatch, .pluginDataReset, .settingsGet, .pluginSettingsGet, .pluginSettingsPatch:
             if params["id"] == nil, let plugin = defaults.pluginID { params["id"] = .string(plugin) }
-        case .terminalFrame, .terminalOperations, .terminalOperationStatus, .terminalOperationResult, .terminalOperationWait,
+        case .terminalFrame, .terminalScroll, .terminalPointer, .terminalSelection, .terminalOperations, .terminalOperationStatus, .terminalOperationResult, .terminalOperationWait,
              .layoutAppsList, .layoutAppsRefresh, .layoutsList, .layoutsGet, .layoutsFields, .layoutsValidate, .layoutsCreate, .layoutsUpdate, .layoutsWindows, .layoutsCapture, .layoutsOpen, .layoutsRestoreOriginal, .layoutsLauncher, .layoutsStartupStatus,
              .describe, .version, .workspaceGet, .tabsList, .panesList, .commandList, .windowList, .windowGet,
              .configGet, .configReload, .configValidate, .configPatch, .configResetOverrides, .paletteList, .paletteImport, .appearanceGet, .welcomeGet,

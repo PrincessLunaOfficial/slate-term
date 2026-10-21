@@ -186,3 +186,18 @@ import SlateTermCore
         #expect(throws: ValidationError.self) { try command.run() }
     }
 }
+
+@Test func terminalInteractionCLIRejectsUnsafeInputBeforeConnecting() throws {
+    for name in ["scroll", "pointer", "selection"] {
+        for extra in [[], ["--pane", "p1"], ["--pane", "p1", "--session-id", "s"],
+                      ["--pane", "p1", "--session-id", "s", "--expected-instance-id", "e", "--active"]] {
+            let command = try TerminalCommand.parse([name] + extra + ["--socket", "/tmp/slate-must-not-connect.sock"])
+            #expect(throws: ValidationError.self) { try command.run() }
+        }
+    }
+    for extra in [["pointer", "--pointer-action", "down"], ["scroll", "--delta-x", "0", "--delta-y", "0"],
+                  ["selection", "--pointer-action", "click"]] {
+        let command = try TerminalCommand.parse(extra + ["--pane", "p1", "--session-id", "s", "--expected-instance-id", "e", "--socket", "/tmp/slate-must-not-connect.sock"])
+        #expect(throws: RPCFailure.self) { try command.run() }
+    }
+}

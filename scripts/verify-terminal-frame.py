@@ -50,6 +50,32 @@ with AppFixture('terminal-frame') as app:
     cli = app.cli('terminal', 'frame', '--pane', 'p1', '--session-id', session, '--expected-instance-id', epoch)
     verify(cli)
 
+    # Guarded pointer/selection/scroll are explicit mutations of this fixture's
+    # terminal only. This script is VM-only, never an ambient host smoke test.
+    def geometry(value):
+        return {key: value[key] for key in ('pointWidth', 'pointHeight', 'pixelWidth', 'pixelHeight')}
+    interaction = params | dict(geometry=geometry(frame()), point=dict(x=1, y=1))
+    app.rpc('terminal.pointer', **(interaction | dict(action='down')), error=-32602)
+    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=0)), error=-32602)
+    stale_geometry = geometry(frame()) | dict(pointWidth=0.5)
+    app.rpc('terminal.pointer', **(interaction | dict(geometry=stale_geometry, action='click')), error=-32602)
+    stale_geometry = geometry(frame()) | dict(pointWidth=interaction['geometry']['pointWidth'] + 1)
+    app.rpc('terminal.pointer', **(interaction | dict(geometry=stale_geometry, action='click')), error=-32022)
+    before = app.rpc('workspace.snapshot')
+    dispatch = app.rpc('terminal.pointer', **(interaction | dict(action='move')))
+    assert dispatch == dict(paneId='p1', sessionId=session, appInstanceId=epoch, delivery='dispatched')
+    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=1)))
+    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=-1)))
+    after = app.rpc('workspace.snapshot')
+    assert before['workspaceRevision'] == after['workspaceRevision'], 'Interaction implicitly changed workspace/focus'
+    app.rpc('terminal.run', pane='p1', command="printf '\\033[H\\033[2JSELECTION_FIXTURE_NATIVE_TEXT\\n'")
+    interaction['geometry'] = geometry(frame())
+    app.rpc('terminal.pointer', **(interaction | dict(action='drag', to=dict(x=min(220, interaction['geometry']['pointWidth'] - 1), y=1))))
+    selected = app.rpc('terminal.selection', **params)
+    assert selected['hasSelection'] and selected['text'], 'Native drag did not create a selection'
+    assert len(selected['text'].encode()) <= 128 * 1024
+    assert app.cli('terminal', 'selection', '--pane', 'p1', '--session-id', session, '--expected-instance-id', epoch) == selected
+
     assets = app.root / 'frame-panel'
     assets.mkdir()
     (assets / 'index.html').write_text('<!doctype html><title>Frame fixture</title>')
@@ -60,6 +86,11 @@ with AppFixture('terminal-frame') as app:
         return app.rpc('debug.pluginEval', pane=panel, script=script)
     eventually('plugin bridge', lambda: js('typeof workspace') == 'object')
     verify(js('await workspace.terminal.frame(' + json.dumps(params) + ')'))
+    assert js('await workspace.terminal.selection(' + json.dumps(params) + ')') == selected
+    interaction['geometry'] = geometry(frame())
+    assert js('await workspace.terminal.pointer(' + json.dumps(interaction | dict(action='move')) + ')')['delivery'] == 'dispatched'
+    assert js('await workspace.terminal.scroll(' + json.dumps(interaction | dict(deltaX=0, deltaY=1)) + ')')['delivery'] == 'dispatched'
+
     # An ordinary page still has no bridge; this capability adds no origin bypass.
     app.rpc('command.run', id='pane.type', pane=panel, type='browser', force=True)
     assert app.rpc('browser.eval', pane=panel, script='typeof window.workspace') == 'undefined'

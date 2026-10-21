@@ -138,7 +138,7 @@ struct Target: ParsableArguments {
 struct TerminalCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "terminal", abstract: "Generic terminal I/O and authenticated shell run/wait operations.")
     enum Action: String, CaseIterable, ExpressibleByArgument {
-        case send, key, capture, frame, run, wait, start, search
+        case send, key, capture, frame, scroll, pointer, selection, run, wait, start, search
         case operations, operationStatus, operationResult, operationWait
     }
     @Argument var action: Action
@@ -155,21 +155,39 @@ struct TerminalCommand: ParsableCommand {
     @Option(help: "Require a later authenticated prompt sequence.") var afterSequence: Int?
     @Option(help: "Search action: get, set, next, previous, end.") var searchAction: String?
     @Option(help: "Literal search query for search --search-action set.") var query: String?
+    @Option(help: "Exact frame geometry JSON for scroll/pointer: pointWidth, pointHeight, pixelWidth, pixelHeight.") var geometry: String?
+    @Option(help: "Top-left native point JSON {x,y} for scroll/pointer.") var point: String?
+    @Option(help: "Drag endpoint JSON {x,y}; pointer drag only.") var to: String?
+    @Option(help: "Pointer action: move, click or drag; left button, atomic release.") var pointerAction: String?
+    @Option(help: "Unique modifier JSON array: shift, control, alt, super; pointer only.") var modifiers: String?
+    @Option(help: "Horizontal native wheel steps in -100...100.") var deltaX: Double?
+    @Option(help: "Vertical native wheel steps in -100...100; positive is up.") var deltaY: Double?
     @Option(help: "Run/wait deadline in milliseconds, 1...295000; default 30000. Expiry does not stop the process.") var timeoutMilliseconds: Int?
 
     func run() throws {
-        if action == .frame {
+        let interaction = TerminalInteractionRequest.Action(rawValue: action.rawValue)
+        if action == .frame || interaction != nil {
             guard let pane = target.pane, let sessionId, let instance = connection.expectedInstanceId,
                   target.tab == nil, !target.active, !target.force,
                   target.expectedLayoutRevision == nil, target.expectedWorkspaceRevision == nil,
                   scope == nil, text == nil, command == nil, shell == nil, commandId == nil, key == nil,
                   contains == nil, afterSequence == nil, searchAction == nil, query == nil, timeoutMilliseconds == nil else {
-                throw ValidationError("terminal frame requires --pane, --session-id and --expected-instance-id only")
+                throw ValidationError("terminal \(action.rawValue) requires explicit --pane, --session-id and --expected-instance-id; no contextual or unrelated options")
             }
-            let params: [String: JSONValue] = ["pane": .string(pane), "sessionId": .string(sessionId), "expectedInstanceId": .string(instance)]
-            _ = try TerminalFrameRequest(params)
-            try connection.call("terminal.frame", params: params, timeoutSeconds: 5)
+            var params: [String: JSONValue] = ["pane": .string(pane), "sessionId": .string(sessionId), "expectedInstanceId": .string(instance)]
+            for (key, value) in [("geometry", geometry), ("point", point), ("to", to), ("modifiers", modifiers)] {
+                if let value { params[key] = try JSONDecoder().decode(JSONValue.self, from: Data(value.utf8)) }
+            }
+            if let pointerAction { params["action"] = .string(pointerAction) }
+            if let deltaX { params["deltaX"] = .number(deltaX) }
+            if let deltaY { params["deltaY"] = .number(deltaY) }
+            if let interaction { _ = try TerminalInteractionRequest(action: interaction, params: params) }
+            else { _ = try TerminalFrameRequest(params) }
+            try connection.call("terminal.\(action.rawValue)", params: params, timeoutSeconds: 5)
             return
+        }
+        guard geometry == nil, point == nil, to == nil, pointerAction == nil, modifiers == nil, deltaX == nil, deltaY == nil else {
+            throw ValidationError("Geometry, pointer and wheel options require terminal scroll or pointer")
         }
         let handleLookup = AutomationMethod(rawValue: "terminal.\(action.rawValue)")?.family == .terminalOperations
         if handleLookup {

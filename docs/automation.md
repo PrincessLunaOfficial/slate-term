@@ -354,3 +354,74 @@ The implementation bypasses visibility/vsync scheduling for this explicit render
 request, but a realized attached surface is still required. Locked-Mac behavior,
 GPU failure/rapid resize races, and visual fidelity need the native fixture;
 package tests/builds alone do not establish these results.
+
+## Guarded terminal pointer, wheel and selection
+
+`terminal.scroll`, `terminal.pointer` and `terminal.selection` require explicit
+`pane`, `sessionId` and `expectedInstanceId`, just like `terminal.frame`. All
+trusted clients use the same catalog, dispatch and errors; page aliases are
+`workspace.terminal.scroll/pointer/selection(params)`. There are no inherited
+focus defaults or parameterless picker/shortcut actions for these coordinate
+operations. Native controls share the same Ghostty mouse dispatch helpers.
+
+Both mutations require `geometry: {pointWidth, pointHeight, pixelWidth,
+pixelHeight}` copied from the displayed frame and `point: {x,y}` in top-left
+native points, **not image pixels or phone CSS pixels**. Convert phone pan/zoom
+coordinates to the frame's points first. Dimensions must match the current
+surface exactly. Point dimensions are positive and at most 8192; pixel dimensions
+are integers 1...8192. Coordinates must be finite, nonnegative and strictly inside
+the point dimensions. Stale geometry fails before dispatch. Neither operation
+implicitly focuses a pane or resizes its view/PTY.
+
+- `terminal.scroll` additionally requires `deltaX` and `deltaY`, finite values
+  in -100...100, with at least one nonzero. These are discrete native wheel ticks;
+  positive Y scrolls up. The native configured multiplier applies, so ticks are
+  not exact row counts. No precise/momentum flags or keyboard modifiers are
+  injected. An alternate-screen program can receive mouse events or arrow keys.
+- `terminal.pointer` additionally requires `action: "move" | "click" | "drag"`.
+  Only drag requires `to: {x,y}`. Optional `modifiers` is a unique array of
+  `shift`, `control`, `alt`, `super` (default empty). Click and drag use the left
+  button, with press/move/release in one synchronous host operation. No separate
+  down/up requests can leave a button held after disconnect. Physical mouse
+  buttons currently held reject either mutation. Completion restores physical
+  modifier state and clears hover; an exit outside the viewport sends no extra
+  TUI motion when no button is held.
+- `terminal.selection` reads native selection directly, with no Mac clipboard
+  access. It returns `paneId`, `sessionId`, `appInstanceId`, `hasSelection` and
+  `text`. No selection returns false and an empty string. Text exceeding 128 KiB
+  UTF-8 fails with `selectionTooLarge`; it is never truncated. This bounds the
+  response, not the pinned engine's temporary native selection allocation.
+
+Pointer actions retain native behavior: rapid clicks can be double/triple clicks,
+Shift can extend an existing selection, and `mouse-shift-capture`/terminal modes
+can cause Shift gestures to reach the application. Do not promise forced text
+selection. Configured copy-on-select can write the Mac clipboard on release;
+link or mouse bindings can open links or invoke their normal native actions.
+The no-focus/no-resize contract describes the host's implicit routing, not all
+possible effects of an application receiving input. The read-only selection
+method never invokes these mouse actions.
+
+Mutation results contain `paneId`, `sessionId`, `appInstanceId` and
+`delivery: "dispatched"`. This observes native dispatch, not terminal-application
+acknowledgment. A lost response is uncertain and must never be automatically
+replayed. Refresh the current frame explicitly after a successful operation.
+Invalid parameters return `-32602`; availability failures return `-32022` with
+`data.availability` such as `geometryChanged`, `physicalMouseActive`,
+`sessionReplaced`, `surfaceUnavailable`, `selectionUnavailable` or
+`selectionTooLarge`. A stale app epoch uses the shared `-32050` guard failure.
+
+```sh
+export SLATE_TERM_ACTOR=codex
+slate-term terminal scroll --pane p1 --session-id SESSION --expected-instance-id APP \
+  --geometry '{"pointWidth":640,"pointHeight":480,"pixelWidth":1280,"pixelHeight":960}' \
+  --point '{"x":20,"y":30}' --delta-x 0 --delta-y 3 --json
+slate-term terminal pointer --pane p1 --session-id SESSION --expected-instance-id APP \
+  --geometry '{"pointWidth":640,"pointHeight":480,"pixelWidth":1280,"pixelHeight":960}' \
+  --point '{"x":20,"y":30}' --pointer-action drag --to '{"x":200,"y":30}' --json
+slate-term terminal selection --pane p1 --session-id SESSION --expected-instance-id APP --json
+```
+
+The VM-only `terminal-frame` fixture includes coordinate guards, native gestures,
+selection and CLI/page parity. Host unit tests/builds do not establish actual
+selection, scroll direction under native configuration, locked-Mac input or
+physical-device behavior; that native fixture remains pending until run.

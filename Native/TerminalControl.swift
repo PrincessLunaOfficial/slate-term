@@ -134,6 +134,17 @@ final class TerminalControl {
         }
     }
 
+    func interact(_ request: TerminalInteractionRequest, validateCaller: @MainActor () throws -> Void) throws -> JSONValue {
+        try Task.checkCancellation()
+        try validateCaller()
+        guard !closed, let target = lookup(request.target.pane), target.sessionID == request.target.sessionID else {
+            throw TerminalInteractionRequest.unavailable("sessionReplaced")
+        }
+        // No await from validation to native dispatch: identity and geometry cannot
+        // be replaced by another main-actor operation halfway through a gesture.
+        return try request.result(target.view.interact(request))
+    }
+
     private static func failure(_ error: TerminalRunError) -> RPCFailure {
         let code: Int
         switch error {

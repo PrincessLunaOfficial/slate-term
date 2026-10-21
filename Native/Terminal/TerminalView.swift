@@ -347,14 +347,13 @@ final class TerminalView: NSView, @MainActor NSTextInputClient, NSUserInterfaceV
         return ghostty_input_mouse_button_e(UInt32(event.buttonNumber + 1))
     }
     private func mouseButton(_ event: NSEvent, state: ghostty_input_mouse_state_e, button: ghostty_input_mouse_button_e) -> Bool {
-        guard !isShuttingDown, let surface else { return false }
+        guard !isShuttingDown, surface != nil else { return false }
         mouseMoved(with: event)
-        return ghostty_surface_mouse_button(surface, state, button, modifiers(event.modifierFlags))
+        return dispatchMouseButton(state, button: button, flags: event.modifierFlags)
     }
     override func mouseMoved(with event: NSEvent) {
-        guard !isShuttingDown, let surface else { return }
         let point = convert(event.locationInWindow, from: nil)
-        ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, modifiers(event.modifierFlags))
+        dispatchMousePosition(x: point.x, y: bounds.height - point.y, flags: event.modifierFlags)
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseExited(with event: NSEvent) {
@@ -364,7 +363,7 @@ final class TerminalView: NSView, @MainActor NSTextInputClient, NSUserInterfaceV
     override func rightMouseDragged(with event: NSEvent) { mouseMoved(with: event) }
     override func otherMouseDragged(with event: NSEvent) { mouseMoved(with: event) }
     override func scrollWheel(with event: NSEvent) {
-        guard !isShuttingDown, let surface else { return }
+        guard !isShuttingDown, surface != nil else { return }
         mouseMoved(with: event)
         let momentum: ghostty_input_mouse_momentum_e
         switch event.momentumPhase {
@@ -378,8 +377,80 @@ final class TerminalView: NSView, @MainActor NSTextInputClient, NSUserInterfaceV
         }
         let mods = Int32((event.hasPreciseScrollingDeltas ? 1 : 0) | (Int(momentum.rawValue) << 1))
         let multiplier = event.hasPreciseScrollingDeltas ? 2.0 : 1.0
-        ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX * multiplier, event.scrollingDeltaY * multiplier, mods)
+        dispatchMouseScroll(x: event.scrollingDeltaX * multiplier, y: event.scrollingDeltaY * multiplier, mods: mods)
     }
+    private func dispatchMousePosition(x: Double, y: Double, flags: NSEvent.ModifierFlags) {
+        guard !isShuttingDown, let surface else { return }
+        ghostty_surface_mouse_pos(surface, x, y, modifiers(flags))
+    }
+    private func dispatchMouseButton(_ state: ghostty_input_mouse_state_e, button: ghostty_input_mouse_button_e,
+                                     flags: NSEvent.ModifierFlags) -> Bool {
+        guard !isShuttingDown, let surface else { return false }
+        return ghostty_surface_mouse_button(surface, state, button, modifiers(flags))
+    }
+    private func dispatchMouseScroll(x: Double, y: Double, mods: Int32) {
+        guard !isShuttingDown, let surface else { return }
+        ghostty_surface_mouse_scroll(surface, x, y, mods)
+    }
+
+    func interact(_ request: TerminalInteractionRequest) throws -> [String: JSONValue] {
+        guard !isShuttingDown, !isClosed, let surface, window != nil, !isHiddenOrHasHiddenAncestor,
+              bounds.width > 0, bounds.height > 0, pixelSize.width > 0, pixelSize.height > 0 else {
+            throw TerminalInteractionRequest.unavailable("surfaceUnavailable")
+        }
+        if let geometry = request.geometry {
+            try geometry.validate(pointWidth: bounds.width, pointHeight: bounds.height,
+                pixelWidth: Int(pixelSize.width), pixelHeight: Int(pixelSize.height))
+        }
+        if request.action == .selection {
+            guard ghostty_surface_has_selection(surface) else { return try TerminalInteractionRequest.selectionResult(nil) }
+            var text = ghostty_text_s()
+            guard ghostty_surface_read_selection(surface, &text) else {
+                throw TerminalInteractionRequest.unavailable("selectionUnavailable")
+            }
+            defer { ghostty_surface_free_text(surface, &text) }
+            guard text.text_len <= TerminalInteractionRequest.maximumSelectionBytes else {
+                throw TerminalInteractionRequest.unavailable("selectionTooLarge")
+            }
+            guard let bytes = text.text else { throw TerminalInteractionRequest.unavailable("selectionUnavailable") }
+            return try TerminalInteractionRequest.selectionResult(String(decoding:
+                UnsafeRawBufferPointer(start: bytes, count: Int(text.text_len)), as: UTF8.self))
+        }
+        guard NSEvent.pressedMouseButtons == 0 else { throw TerminalInteractionRequest.unavailable("physicalMouseActive") }
+        var flags: NSEvent.ModifierFlags = []
+        for modifier in request.modifiers {
+            switch modifier {
+            case .shift: flags.insert(.shift)
+            case .control: flags.insert(.control)
+            case .alt: flags.insert(.option)
+            case .super: flags.insert(.command)
+            }
+        }
+        func finish() {
+            // Same-position motion is ignored by Ghostty before modifier updates.
+            // Exit is different from every validated endpoint, restores physical
+            // modifiers, and emits no TUI motion when no mouse button is held.
+            dispatchMousePosition(x: -1, y: -1, flags: NSEvent.modifierFlags)
+        }
+        if request.action == .pointer {
+            try request.performPointer(move: { point in
+                dispatchMousePosition(x: point.x, y: point.y, flags: flags)
+            }, button: { pressed in
+                // The Boolean means consumed, not successful: selection may
+                // mutate even when false. Always release, never retry on false.
+                _ = dispatchMouseButton(pressed ? GHOSTTY_MOUSE_PRESS : GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT, flags: flags)
+                if !pressed { ghostty_surface_mouse_pressure(surface, 0, 0) }
+            }, finish: finish)
+        } else {
+            try request.performScroll(prepare: {
+                dispatchMousePosition(x: -1, y: -1, flags: [])
+            }, move: { point in
+                dispatchMousePosition(x: point.x, y: point.y, flags: [])
+            }, scroll: { x, y in dispatchMouseScroll(x: x, y: y, mods: 0) }, finish: finish)
+        }
+        return ["delivery": .string("dispatched")]
+    }
+
     override func pressureChange(with event: NSEvent) {
         if !isShuttingDown, let surface { ghostty_surface_mouse_pressure(surface, UInt32(max(0, event.stage)), Double(event.pressure)) }
     }
