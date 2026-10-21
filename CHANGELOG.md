@@ -6,11 +6,15 @@ Detailed change record for agents and maintainers. Public release notes live in 
 
 ### Added
 
+- Add guarded `terminal.frame` across the shared catalog, CLI, registered page bridge and services. An explicit pane/session/app epoch yields an original-resolution Display P3 PNG from a fresh GPU render of the native terminal viewport. The bounded Ghostty request copies completed BGRA bytes before buffer reuse, handles cancellation without aliasing later requests, and drives rendering independently of display-link pacing. It does not capture AppKit chrome, change focus/PTY size or use screen-recording APIs; unavailable/oversized/changed frames fail explicitly. Package/CLI/pixel round-trip tests pass; actual native fidelity, locked-Mac behavior and lifecycle races remain pending VM verification.
+
 ### Changed
 
 ### Fixed
 
 ### Internal
+
+- Pin the terminal-frame Ghostty patch and include its new source in dependency receipts and corresponding-source archives. Add a VM-only terminal-frame integration gate. Host validation: four pure Ghostty ownership/generation tests, 554 Swift package tests, 72 VM-runner tests and 121 release-tooling tests (four optional tool checks skipped). The pinned Ghostty framework and native app build passed; these do not establish native rendering behavior.
 
 ## 0.9.0 — Pending publication
 

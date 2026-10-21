@@ -118,7 +118,7 @@ public enum PresenceAction: String, Sendable, Codable {
     /// settings and events never do, even when the CLI adds an inherited pane.
     public static func forMethod(_ method: String, commandID: String? = nil) -> Self? {
         switch method {
-        case "terminal.capture", "panes.capture",
+        case "terminal.capture", "terminal.frame", "panes.capture",
              "web.snapshot", "web.screenshot", "browser.snapshot", "browser.screenshot":
             return .read
         case "terminal.send", "terminal.key", "panes.send", "web.click", "web.fill", "web.select", "web.scroll", "web.focus", "web.key",

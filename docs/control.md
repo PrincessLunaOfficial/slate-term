@@ -114,3 +114,9 @@ Browser integrations also expose `web.dialog` / `web.respondDialog`,
 `browser.closePopup`. The generated trusted page aliases and service/CLI clients
 use the same catalog. Add `popupId` beside the owning `pane` to address a popup
 through web or browser operations; closed IDs never fall back to the root view.
+
+
+`terminal.frame` is the explicit guarded raster counterpart of `terminal.capture`.
+It is available to CLI, socket, registered page and service clients through the
+same catalog. Read [authoritative terminal frames](automation.md#authoritative-terminal-frames)
+for identities, PNG bounds, freshness and resource availability.

@@ -41,9 +41,28 @@ patched_sha=ecbbf61a3a432ffb457e8f07e5c79913d6b121f9c5e8ac63950ce6449dba1fb9
   echo 'Ghostty patch checksum mismatch.' >&2; exit 1;
 }
 git -C "$source_dir" diff --cached --quiet || { echo 'Ghostty has staged changes.' >&2; exit 1; }
-git -C "$source_dir" diff --quiet -- . ':!src/build/SharedDeps.zig' ':!src/termio/Exec.zig' ':!include/ghostty.h' ':!src/apprt/embedded.zig' ':!src/Surface.zig' ':!src/termio/Options.zig' ':!src/termio/Termio.zig' || {
+git -C "$source_dir" diff --quiet -- . ':!src/build/SharedDeps.zig' ':!src/termio/Exec.zig' ':!include/ghostty.h' ':!src/apprt/embedded.zig' ':!src/Surface.zig' ':!src/termio/Options.zig' ':!src/termio/Termio.zig' ':!src/renderer/Metal.zig' ':!src/renderer/Thread.zig' ':!src/renderer/generic.zig' ':!src/renderer/message.zig' ':!src/renderer/metal/Frame.zig' ':!src/renderer/FrameCapture.zig' || {
   echo 'Ghostty sources differ from the pin outside the approved patch.' >&2; exit 1;
 }
+# BEGIN terminal frame patch pins
+frame_patch_sha=04fdb44272fe4b2f6148994f473b523c760d78ab0d7dcf231853846fdaf889df
+frame_header_original_sha=c774f20ecd34ddaa3f5a35ac71e03f3d11b403fb2943fe4b8e054c4a80bdc4cd
+frame_header_patched_sha=c69dcf797729f72d46b9f1eef2c7c2ac9f00286312f8ecd5b4934136caec18ab
+frame_embedded_original_sha=4ed28bcfca9be2fc2caa21ca32d02d381d7a90077d65744bc2778043011a96fd
+frame_embedded_patched_sha=71032e9dbda962b71bd0313e79990f2a84547e1cfcabf9f6a4524886739c4b63
+frame_metal_original_sha=556efd8380013c53148a897acd9dae7e2abfc349b26dd4baa6e64373c1c525cd
+frame_metal_patched_sha=84075b5d38d488ce68c043aa3c45f462a0843a86d26076710d05ab6fb58c8195
+frame_thread_original_sha=3421a71a216dab2b9c63081ae779bb9a3d883c32d34c9cffb3cbc0580034f724
+frame_thread_patched_sha=b4651453a244377019916f3aad4cbbb3c9ff4b12e0ce2da403ec81bb25c1cf10
+frame_generic_original_sha=a6e5315955b90ae635094b603ebc70b72cafd7270e657bbb3e1194ec1823567f
+frame_generic_patched_sha=d182e6190f3e61274ced7aebba75d410a4d272d2804bee49c6f8b4fb6f250c6a
+frame_message_original_sha=7ad7414a5ba4da56cf692941ca513812f4036705a59111eea3c251022b5fb88e
+frame_message_patched_sha=ce7ccbfa83cec15724bc3f3b3484174d367d535f6f1b3c00fb3c1fddf528de35
+frame_completion_original_sha=4adeca1cde9c870cff74cc0da9124d7f308aad943c27c6694fc7fc90a0357ae5
+frame_completion_patched_sha=d0a01b6158097c7bb98e60e19f3648f557e04b703bc939c8e4f80e2740e508ee
+frame_capture_original_sha=missing
+frame_capture_patched_sha=e2e488f3c193dd541465d0507a455b3fd261a66d90c985785e845913372e79d7
+# END terminal frame patch pins
 source_sha="$(shasum -a 256 "$source_dir/src/build/SharedDeps.zig" | cut -d ' ' -f1)"
 case "$source_sha" in
   "$original_sha")
@@ -100,7 +119,12 @@ for output_target in header embedded surface options termio; do
   output_patched_pin="output_${output_target}_patched_sha"
   output_source_sha="$(shasum -a 256 "$source_dir/$output_path" | cut -d ' ' -f1)"
   [[ "$output_source_sha" = "${!output_original_pin}" ]] || output_original=false
-  [[ "$output_source_sha" = "${!output_patched_pin}" ]] || output_patched=false
+  output_frame_pin="frame_${output_target}_patched_sha"
+  if [[ "$output_source_sha" != "${!output_patched_pin}" ]]; then
+    if [[ "$output_target" != header && "$output_target" != embedded ]] || [[ "$output_source_sha" != "${!output_frame_pin}" ]]; then
+      output_patched=false
+    fi
+  fi
 done
 if [[ "$output_original" = true ]]; then
   git -C "$source_dir" apply --check "$output_patch_file"
@@ -108,11 +132,46 @@ if [[ "$output_original" = true ]]; then
 elif [[ "$output_patched" != true ]]; then
   echo 'Ghostty restored-output targets differ from the approved versions.' >&2; exit 1;
 fi
+# Fresh owned GPU frames; never accept hand-edited dependency sources.
+frame_patch_file="$root/patches/ghostty-terminal-frame.patch"
+[[ "$(shasum -a 256 "$frame_patch_file" | cut -d ' ' -f1)" = "$frame_patch_sha" ]] || {
+  echo 'Ghostty terminal-frame patch checksum mismatch.' >&2; exit 1;
+}
+frame_original=true
+frame_patched=true
+for frame_target in header embedded metal thread generic message completion capture; do
+  case "$frame_target" in
+    header) frame_path=include/ghostty.h ;;
+    embedded) frame_path=src/apprt/embedded.zig ;;
+    metal) frame_path=src/renderer/Metal.zig ;;
+    thread) frame_path=src/renderer/Thread.zig ;;
+    generic) frame_path=src/renderer/generic.zig ;;
+    message) frame_path=src/renderer/message.zig ;;
+    completion) frame_path=src/renderer/metal/Frame.zig ;;
+    capture) frame_path=src/renderer/FrameCapture.zig ;;
+  esac
+  frame_original_pin="frame_${frame_target}_original_sha"
+  frame_patched_pin="frame_${frame_target}_patched_sha"
+  frame_source_sha=missing
+  if [[ -f "$source_dir/$frame_path" ]]; then
+    frame_source_sha="$(shasum -a 256 "$source_dir/$frame_path" | cut -d ' ' -f1)"
+  fi
+  [[ "$frame_source_sha" = "${!frame_original_pin}" ]] || frame_original=false
+  [[ "$frame_source_sha" = "${!frame_patched_pin}" ]] || frame_patched=false
+done
+if [[ "$frame_original" = true ]]; then
+  git -C "$source_dir" apply --check "$frame_patch_file"
+  git -C "$source_dir" apply "$frame_patch_file"
+elif [[ "$frame_patched" != true ]]; then
+  echo 'Ghostty terminal-frame targets differ from the approved versions.' >&2; exit 1;
+fi
 # Compiler caches belong to this checkout, including linked worktrees.
 export ZIG_GLOBAL_CACHE_DIR="$root/.build/release-zig-cache"
 export ZIG_LOCAL_CACHE_DIR="$source_dir/.zig-cache"
 # Slate supplies its own UI and does not enable upstream localization or telemetry.
 cd "$source_dir"
+# Pure ownership/generation tests; this does not create native windows or GPUs.
+"$zig_dir/zig" test src/renderer/FrameCapture.zig -lc
 "$zig_dir/zig" build -j4 -Doptimize=ReleaseFast -Demit-xcframework=true -Demit-macos-app=false \
   -Dxcframework-target=native -Di18n=false -Dsentry=false
 cd "$root"
@@ -127,7 +186,7 @@ fi
 python3 - <<'PY_RECEIPT'
 import hashlib
 from pathlib import Path
-inputs = [Path('scripts/build-ghostty.sh'), Path('patches/ghostty-optional-libintl.patch'), Path('patches/ghostty-bounded-shutdown.patch'), Path('patches/ghostty-restored-output.patch')]
+inputs = [Path('scripts/build-ghostty.sh'), Path('patches/ghostty-optional-libintl.patch'), Path('patches/ghostty-bounded-shutdown.patch'), Path('patches/ghostty-restored-output.patch'), Path('patches/ghostty-terminal-frame.patch')]
 for directory in ('.build/bootstrap/ghostty/macos/GhosttyKit.xcframework', '.build/bootstrap/ghostty/zig-out/share'):
     inputs.extend(p for p in sorted(Path(directory).rglob('*')) if p.is_file())
 receipt = Path('.build/bootstrap/ghostty-build.sha256')

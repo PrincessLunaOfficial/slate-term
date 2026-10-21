@@ -138,7 +138,7 @@ struct Target: ParsableArguments {
 struct TerminalCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "terminal", abstract: "Generic terminal I/O and authenticated shell run/wait operations.")
     enum Action: String, CaseIterable, ExpressibleByArgument {
-        case send, key, capture, run, wait, start, search
+        case send, key, capture, frame, run, wait, start, search
         case operations, operationStatus, operationResult, operationWait
     }
     @Argument var action: Action
@@ -158,6 +158,19 @@ struct TerminalCommand: ParsableCommand {
     @Option(help: "Run/wait deadline in milliseconds, 1...295000; default 30000. Expiry does not stop the process.") var timeoutMilliseconds: Int?
 
     func run() throws {
+        if action == .frame {
+            guard let pane = target.pane, let sessionId, let instance = connection.expectedInstanceId,
+                  target.tab == nil, !target.active, !target.force,
+                  target.expectedLayoutRevision == nil, target.expectedWorkspaceRevision == nil,
+                  scope == nil, text == nil, command == nil, shell == nil, commandId == nil, key == nil,
+                  contains == nil, afterSequence == nil, searchAction == nil, query == nil, timeoutMilliseconds == nil else {
+                throw ValidationError("terminal frame requires --pane, --session-id and --expected-instance-id only")
+            }
+            let params: [String: JSONValue] = ["pane": .string(pane), "sessionId": .string(sessionId), "expectedInstanceId": .string(instance)]
+            _ = try TerminalFrameRequest(params)
+            try connection.call("terminal.frame", params: params, timeoutSeconds: 5)
+            return
+        }
         let handleLookup = AutomationMethod(rawValue: "terminal.\(action.rawValue)")?.family == .terminalOperations
         if handleLookup {
             guard target.pane == nil, target.tab == nil, !target.force, !target.active,

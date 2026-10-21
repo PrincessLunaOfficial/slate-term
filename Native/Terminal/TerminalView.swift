@@ -2,6 +2,7 @@ import AppKit
 import Carbon
 import GhosttyKit
 import SlateTermSettings
+import SlateTermCore
 
 /// The NSView and C surface travel together between containers.
 @MainActor
@@ -63,6 +64,8 @@ final class TerminalView: NSView, @MainActor NSTextInputClient, NSUserInterfaceV
     private let runtime: GhosttyRuntime
     let startingDirectory: String?
     private var surface: ghostty_surface_t?
+    private var frameCaptureToken: UInt64?
+    private var nextFrameCaptureToken: UInt64 = 0
     private var colorScheme: ghostty_color_scheme_e?
     // The pinned engine creates surfaces focused; track every forwarded focus update.
     private(set) var hasTerminalFocus = true
@@ -880,6 +883,50 @@ final class TerminalView: NSView, @MainActor NSTextInputClient, NSUserInterfaceV
             guard !self.isClosed else { return }
             self.onFindChanged?(focus)
         }
+    }
+
+    /// Explicit renderer work; never reads mutable layer.contents or changes the
+    /// native viewport. The engine copies only this request's GPU-completed frame.
+    func beginFrameCapture() throws -> UInt64 {
+        guard !isClosed, !isShuttingDown, let surface else { throw TerminalFrameLimits.unavailable("sessionClosed") }
+        guard frameCaptureToken == nil else { throw TerminalFrameLimits.unavailable("captureBusy") }
+        guard window != nil, !isHiddenOrHasHiddenAncestor, bounds.width > 0, bounds.height > 0 else {
+            throw TerminalFrameLimits.unavailable("paneNotAttached")
+        }
+        guard nextFrameCaptureToken < UInt64.max else { throw TerminalFrameLimits.unavailable("captureIdentityExhausted") }
+        nextFrameCaptureToken += 1
+        let token = nextFrameCaptureToken
+        guard ghostty_surface_request_frame(surface, token) else { throw TerminalFrameLimits.unavailable("rendererUnavailable") }
+        frameCaptureToken = token
+        return token
+    }
+
+    func validateFrameCapture(_ token: UInt64) throws {
+        guard !isClosed, !isShuttingDown, surface != nil, frameCaptureToken == token else {
+            throw TerminalFrameLimits.unavailable("sessionClosed")
+        }
+    }
+
+    func readFrameCapture(_ token: UInt64) throws -> TerminalFramePixels? {
+        try validateFrameCapture(token)
+        guard let surface else { throw TerminalFrameLimits.unavailable("sessionClosed") }
+        var frame = ghostty_frame_s()
+        let result = ghostty_surface_read_frame(surface, token, &frame)
+        if result == 0 { return nil }
+        guard result == 1 else { throw TerminalFrameLimits.unavailable("renderFailed") }
+        defer { ghostty_surface_free_frame(&frame) }
+        guard frame.request_id == token, let pixels = frame.pixels,
+              frame.pixels_len > 0, frame.pixels_len <= TerminalFrameLimits.maximumPixelBytes else {
+            throw TerminalFrameLimits.unavailable("invalidPixelBuffer")
+        }
+        return try TerminalFramePixels(data: Data(bytes: pixels, count: frame.pixels_len),
+                width: Int(frame.width), height: Int(frame.height), bytesPerRow: Int(frame.bytes_per_row))
+    }
+
+    func endFrameCapture(_ token: UInt64) {
+        guard frameCaptureToken == token else { return }
+        if let surface { ghostty_surface_cancel_frame(surface, token) }
+        frameCaptureToken = nil
     }
 
     func capture() -> String { readText(history: false, maximumBytes: Int.max).text }

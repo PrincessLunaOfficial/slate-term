@@ -1,0 +1,493 @@
+diff --git a/include/ghostty.h b/include/ghostty.h
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1188,6 +1188,21 @@
+ GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
++// Owned premultiplied BGRA8 Display-P3 pixels, tightly packed, at most 32 MiB.
++// Requests use strictly increasing, nonzero IDs per surface. Only one is live.
++typedef struct {
++  uint64_t request_id;
++  uint32_t width;
++  uint32_t height;
++  uint32_t bytes_per_row;
++  uint8_t* pixels;
++  size_t pixels_len;
++} ghostty_frame_s;
++GHOSTTY_API bool ghostty_surface_request_frame(ghostty_surface_t, uint64_t);
++// 0 pending, 1 ready (ownership transferred), -1 failed or unknown.
++GHOSTTY_API int ghostty_surface_read_frame(ghostty_surface_t, uint64_t, ghostty_frame_s*);
++GHOSTTY_API void ghostty_surface_cancel_frame(ghostty_surface_t, uint64_t);
++GHOSTTY_API void ghostty_surface_free_frame(ghostty_frame_s*);
+ GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
+ GHOSTTY_API void ghostty_surface_set_focus(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_set_occlusion(ghostty_surface_t, bool);
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1983,6 +1983,36 @@
+         surface.draw();
+     }
+ 
++    /// Request an owned GPU-completed terminal frame. The public host must
++    /// bound its wait and cancel abandoned requests. Never touches the PTY.
++    export fn ghostty_surface_request_frame(surface: *Surface, request_id: u64) bool {
++        if (comptime !@hasDecl(renderer.Renderer.API, "captureSupported")) return false;
++        const capture = &surface.core_surface.renderer.frame_capture;
++        if (!capture.begin(global.io(), request_id)) return false;
++        const thread = &surface.core_surface.renderer_thread;
++        if (thread.mailbox.push(global.io(), .{ .capture_frame = request_id }, .instant) == 0) {
++            capture.cancel(global.io(), request_id);
++            return false;
++        }
++        thread.wakeup.notify() catch {
++            capture.cancel(global.io(), request_id);
++            return false;
++        };
++        return true;
++    }
++
++    export fn ghostty_surface_read_frame(surface: *Surface, request_id: u64, result: *@import("../renderer/FrameCapture.zig").Frame) c_int {
++        return surface.core_surface.renderer.frame_capture.read(global.io(), request_id, result);
++    }
++
++    export fn ghostty_surface_cancel_frame(surface: *Surface, request_id: u64) void {
++        surface.core_surface.renderer.frame_capture.cancel(global.io(), request_id);
++    }
++
++    export fn ghostty_surface_free_frame(frame: *@import("../renderer/FrameCapture.zig").Frame) void {
++        frame.deinit(std.heap.c_allocator);
++    }
++
+     /// Update the size of a surface. This will trigger resize notifications
+     /// to the pty and the renderer.
+     export fn ghostty_surface_set_size(surface: *Surface, w: u32, h: u32) void {
+diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+--- a/src/renderer/Metal.zig
++++ b/src/renderer/Metal.zig
+@@ -20,6 +20,8 @@
+ pub const Device = @import("metal/Device.zig");
+ 
+ pub const GraphicsAPI = Metal;
++/// Owned completed-frame capture is supported by the Metal path.
++pub const captureSupported = true;
+ pub const Target = @import("metal/Target.zig");
+ pub const Frame = @import("metal/Frame.zig");
+ pub const RenderPass = @import("metal/RenderPass.zig");
+diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
+--- a/src/renderer/Thread.zig
++++ b/src/renderer/Thread.zig
+@@ -329,6 +329,32 @@
+                 // state across different transitions is going to be bug-prone,
+                 // so its easier to just let them keep firing and have them
+                 // check the visible state themselves to control their behavior.
++            },
++
++            .capture_frame => |request_id| capture: {
++                if (!self.renderer.frame_capture.pending(global.io(), request_id)) break :capture;
++                // Match the ordinary render path: do not rebuild frame state
++                // when the graphics context has already been unrealized.
++                if (!self.renderer.display_realized) {
++                    self.renderer.frame_capture.fail(global.io(), request_id);
++                    break :capture;
++                }
++                // Always settle failed requests, including zero/unrealized
++                // surfaces and synchronized output. Submitted requests finish
++                // asynchronously at their exact GPU completion callback.
++                const updated = self.renderer.updateFrame(self.state, self.flags.cursor_blink_visible) catch |err| {
++                    self.renderer.frame_capture.fail(global.io(), request_id);
++                    log.warn("capture frame update failed err={}", .{err});
++                    break :capture;
++                };
++                if (!updated) {
++                    self.renderer.frame_capture.fail(global.io(), request_id);
++                    break :capture;
++                }
++                self.renderer.drawCapturedFrame(request_id) catch |err| {
++                    self.renderer.frame_capture.fail(global.io(), request_id);
++                    log.warn("capture frame draw failed err={}", .{err});
++                };
+             },
+ 
+             .focus => |v| focus: {
+@@ -570,11 +596,13 @@
+     if (!t.flags.visible) return .disarm;
+ 
+     // Update our frame data
+-    t.renderer.updateFrame(
++    _ = t.renderer.updateFrame(
+         t.state,
+         t.flags.cursor_blink_visible,
+-    ) catch |err|
++    ) catch |err| failed: {
+         log.warn("error rendering err={}", .{err});
++        break :failed false;
++    };
+ 
+     // Draw
+     t.drawFrame(false);
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -28,6 +28,7 @@
+ const Terminal = terminal.Terminal;
+ const Health = renderer.Health;
+ const compat_file = @import("../lib/compat/file.zig");
++const FrameCapture = @import("FrameCapture.zig");
+ 
+ const getConstraint = @import("../font/nerd_font_attributes.zig").getConstraint;
+ 
+@@ -126,6 +127,11 @@
+         /// Unused if the renderer does not need to export frames to
+         /// present its rendered frame.
+         latest_frame: LatestFrame = .{},
++
++        /// Independent owned capture storage; no swap-chain target escapes.
++        frame_capture: FrameCapture = .{},
++        /// Set only under draw_mutex while encoding one requested frame.
++        capture_request_id: u64 = 0,
+ 
+         /// Current font metrics defining our grid.
+         grid_metrics: font.Metrics,
+@@ -834,6 +840,7 @@
+             if (self.search_matches) |*m| m.arena.deinit();
+ 
+             self.latest_frame.deinit(global.io());
++            self.frame_capture.deinit(global.io());
+ 
+             if (DisplayLink != void) {
+                 if (self.display_link) |display_link| {
+@@ -1343,7 +1350,7 @@
+             self: *Self,
+             state: *renderer.State,
+             cursor_blink_visible: bool,
+-        ) Allocator.Error!void {
++        ) Allocator.Error!bool {
+             // CoreText shaping accumulates objects for deferred release over
+             // the course of a frame. Always flush those objects, including
+             // when rebuilding the frame fails due to memory pressure.
+@@ -1394,7 +1401,7 @@
+                 // If we're in a synchronized output state, we pause all rendering.
+                 if (state.terminal.modes.get(.synchronized_output)) {
+                     log.debug("synchronized output started, skipping render", .{});
+-                    return;
++                    return false;
+                 }
+ 
+                 // If scroll-to-bottom on output is enabled, check if the final line
+@@ -1677,6 +1684,7 @@
+ 
+             // Start the display link now that the rebuilt frame is ready.
+             self.syncDisplayLink(null, null);
++            return true;
+         }
+ 
+         /// Draw the frame to the screen.
+@@ -1698,6 +1706,26 @@
+             };
+ 
+             if (sync_display_link) self.syncDisplayLink(null, null);
++        }
++
++        /// Render exactly one fresh request independently of display-link
++        /// pacing. The render thread must have called updateFrame first.
++        pub fn drawCapturedFrame(self: *Self, request_id: u64) !void {
++            if (comptime !@hasDecl(GraphicsAPI, "captureSupported")) return error.CaptureUnsupported;
++            self.draw_mutex.lockUncancelable(global.io());
++            defer self.draw_mutex.unlock(global.io());
++            if (!self.frame_capture.pending(global.io(), request_id)) return;
++            const size = try self.api.surfaceSize();
++            if (!self.display_realized or size.width == 0 or size.height == 0 or
++                size.width > FrameCapture.maximum_dimension or size.height > FrameCapture.maximum_dimension or
++                @as(u64, size.width) * size.height * 4 > FrameCapture.maximum_bytes) return error.CaptureUnavailable;
++            self.capture_request_id = request_id;
++            defer self.capture_request_id = 0;
++            // The token bypasses no-change skipping. Completion is async;
++            // its callback owns the token and copies pixels before slot reuse.
++            // This does not add a GPU wait to the render thread.
++            _ = try self.drawFrameLocked(false);
++            if (self.capture_request_id != 0) return error.CaptureUnavailable;
+         }
+ 
+         /// The body of `drawFrame`. Must be called with `draw_mutex` held.
+@@ -1766,7 +1794,7 @@
+                 swap_chain_rebuilt or
+                 self.cells_rebuilt or
+                 self.animationWake() != null or
+-                sync;
++                sync or self.capture_request_id != 0;
+ 
+             if (!needs_redraw) {
+                 // Ask our caller to resync the display link once the draw
+@@ -1874,6 +1902,9 @@
+ 
+             // Get a frame context from the graphics API.
+             var frame_ctx = try self.api.beginFrame(self, &frame.target);
++            // Frame.begin has adopted the capture token into this exact
++            // command buffer, so an unrelated later redraw cannot consume it.
++            self.capture_request_id = 0;
+             defer frame_ctx.complete(sync);
+ 
+             {
+diff --git a/src/renderer/message.zig b/src/renderer/message.zig
+--- a/src/renderer/message.zig
++++ b/src/renderer/message.zig
+@@ -21,6 +21,9 @@
+     /// if the window is visible or not. A window can be not visible (occluded)
+     /// and still have focus.
+     visible: bool,
++
++    /// Explicit one-shot frame request; does not change focus or visibility.
++    capture_frame: u64,
+ 
+     /// Reset the cursor blink by immediately showing the cursor then
+     /// restarting the timer.
+diff --git a/src/renderer/metal/Frame.zig b/src/renderer/metal/Frame.zig
+--- a/src/renderer/metal/Frame.zig
++++ b/src/renderer/metal/Frame.zig
+@@ -48,6 +48,7 @@
+             .renderer = renderer,
+             .target = target,
+             .sync = false,
++            .capture_request_id = renderer.capture_request_id,
+         },
+         &bufferCompleted,
+     );
+@@ -60,6 +61,7 @@
+     renderer: *Renderer,
+     target: *Target,
+     sync: bool,
++    capture_request_id: u64,
+ }, .{
+     objc.c.id, // MTLCommandBuffer
+ }, void);
+@@ -77,11 +79,31 @@
+         else => .healthy,
+     };
+ 
+-    // If the frame is healthy, present it.
++    // A capture belongs to this encoded command buffer, never whichever
++    // buffer most recently became layer.contents. The slot remains reserved
++    // until frameCompleted below, so the GPU cannot overwrite these pixels.
++    if (block.capture_request_id != 0) {
++        const capture = &block.renderer.frame_capture;
++        const io = @import("../../global.zig").io();
++        defer capture.fail(io, block.capture_request_id);
++        if (status == .completed) {
++            const surface = block.target.surface;
++            const iosurface = @import("macos").iosurface.c;
++            if (iosurface.IOSurfaceLock(@ptrCast(surface), iosurface.kIOSurfaceLockReadOnly, null) == 0) {
++                defer _ = iosurface.IOSurfaceUnlock(@ptrCast(surface), iosurface.kIOSurfaceLockReadOnly, null);
++                if (surface.getBaseAddress()) |base| {
++                    capture.complete(io, block.capture_request_id, block.target.width, block.target.height, surface.getBytesPerRow(), base[0..surface.getAllocSize()]);
++                }
++            }
++        }
++    }
++
++    // Captures are driven on the renderer thread. Do not take the native
++    // synchronous-main-thread presentation path or mutate native visibility.
+     if (health == .healthy) {
+         block.renderer.api.present(
+             block.target.*,
+-            block.sync,
++            block.sync and block.capture_request_id == 0,
+         ) catch |err| {
+             log.err("Failed to present render target: err={}", .{err});
+         };
+diff --git a/src/renderer/FrameCapture.zig b/src/renderer/FrameCapture.zig
+new file mode 100644
+--- /dev/null
++++ b/src/renderer/FrameCapture.zig
+@@ -0,0 +1,190 @@
++//! Bounded owned terminal frame handoff. No GPU/IOSurface pointer escapes.
++const FrameCapture = @This();
++
++const std = @import("std");
++
++pub const maximum_bytes = 32 * 1024 * 1024;
++pub const maximum_dimension = 8192;
++
++/// C ABI: ghostty_frame_s. Pixels are tightly packed, premultiplied BGRA8
++/// in Display P3. A successful read transfers ownership to the caller.
++pub const Frame = extern struct {
++    request_id: u64 = 0,
++    width: u32 = 0,
++    height: u32 = 0,
++    bytes_per_row: u32 = 0,
++    pixels: ?[*]u8 = null,
++    pixels_len: usize = 0,
++
++    pub fn deinit(self: *Frame, alloc: std.mem.Allocator) void {
++        if (self.pixels) |pixels| alloc.free(pixels[0..self.pixels_len]);
++        self.* = .{};
++    }
++};
++
++allocator: std.mem.Allocator = std.heap.c_allocator,
++mutex: std.Io.Mutex = .init,
++highest_request: u64 = 0,
++request_id: u64 = 0,
++phase: enum { idle, pending, ready, failed } = .idle,
++frame: Frame = .{},
++
++/// Strictly increasing IDs prevent an abandoned queued request from being
++/// mistaken for a later request after cancellation. At most one is retained.
++pub fn begin(self: *FrameCapture, io: std.Io, request_id: u64) bool {
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    if (self.phase != .idle or request_id == 0 or request_id <= self.highest_request) return false;
++    self.highest_request = request_id;
++    self.request_id = request_id;
++    self.phase = .pending;
++    return true;
++}
++
++pub fn pending(self: *FrameCapture, io: std.Io, request_id: u64) bool {
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    return self.phase == .pending and self.request_id == request_id;
++}
++
++pub fn fail(self: *FrameCapture, io: std.Io, request_id: u64) void {
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    if (self.phase == .pending and self.request_id == request_id) self.phase = .failed;
++}
++
++/// Must be called after GPU completion and before recycling its target. Copy
++/// rows while the target is still owned by that frame, never retain its pointer.
++pub fn complete(self: *FrameCapture, io: std.Io, request_id: u64, width: usize, height: usize, source_stride: usize, source: []const u8) void {
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    if (self.phase != .pending or self.request_id != request_id) return;
++    self.phase = .failed;
++    if (width == 0 or height == 0 or width > maximum_dimension or height > maximum_dimension) return;
++    const stride = width * 4;
++    const len = stride * height;
++    if (len > maximum_bytes or source_stride < stride) return;
++    const last_row = std.math.mul(usize, source_stride, height - 1) catch return;
++    const required = std.math.add(usize, last_row, stride) catch return;
++    if (source.len < required) return;
++    const pixels = self.allocator.alloc(u8, len) catch return;
++    for (0..height) |row| @memcpy(pixels[row * stride ..][0..stride], source[row * source_stride ..][0..stride]);
++    self.frame = .{
++        .request_id = request_id,
++        .width = @intCast(width),
++        .height = @intCast(height),
++        .bytes_per_row = @intCast(stride),
++        .pixels = pixels.ptr,
++        .pixels_len = pixels.len,
++    };
++    self.phase = .ready;
++}
++
++/// 0 pending, 1 ready with ownership transferred, -1 failed/unknown.
++pub fn read(self: *FrameCapture, io: std.Io, request_id: u64, result: *Frame) c_int {
++    result.* = .{};
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    if (self.request_id != request_id or self.phase == .idle) return -1;
++    switch (self.phase) {
++        .pending => return 0,
++        .ready => {
++            result.* = self.frame;
++            self.frame = .{};
++            self.phase = .idle;
++            self.request_id = 0;
++            return 1;
++        },
++        .failed => {
++            self.phase = .idle;
++            self.request_id = 0;
++            return -1;
++        },
++        .idle => unreachable,
++    }
++}
++
++pub fn cancel(self: *FrameCapture, io: std.Io, request_id: u64) void {
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    if (self.request_id != request_id) return;
++    self.frame.deinit(self.allocator);
++    self.phase = .idle;
++    self.request_id = 0;
++}
++
++pub fn deinit(self: *FrameCapture, io: std.Io) void {
++    self.mutex.lockUncancelable(io);
++    defer self.mutex.unlock(io);
++    self.frame.deinit(self.allocator);
++    self.phase = .idle;
++    self.request_id = 0;
++}
++
++test "capture owns pixels, strips row padding and transfers once" {
++    const t = std.testing;
++    var capture: FrameCapture = .{ .allocator = t.allocator };
++    defer capture.deinit(t.io);
++    var source = [_]u8{ 1, 2, 3, 4, 99, 99, 99, 99, 5, 6, 7, 8 };
++    try t.expect(capture.begin(t.io, 1));
++    var frame: Frame = .{};
++    try t.expectEqual(@as(c_int, 0), capture.read(t.io, 1, &frame));
++    capture.complete(t.io, 1, 1, 2, 8, &source);
++    @memset(&source, 0);
++    try t.expectEqual(@as(c_int, 1), capture.read(t.io, 1, &frame));
++    defer frame.deinit(t.allocator);
++    try t.expectEqual(@as(u32, 4), frame.bytes_per_row);
++    try t.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, frame.pixels.?[0..frame.pixels_len]);
++    var missing: Frame = .{};
++    try t.expectEqual(@as(c_int, -1), capture.read(t.io, 1, &missing));
++}
++
++test "cancelled queued and failed captures cannot complete a successor" {
++    const t = std.testing;
++    var capture: FrameCapture = .{ .allocator = t.allocator };
++    defer capture.deinit(t.io);
++    try t.expect(!capture.begin(t.io, 0));
++    try t.expect(capture.begin(t.io, 1));
++    try t.expect(!capture.begin(t.io, 2));
++    capture.cancel(t.io, 1);
++    try t.expect(!capture.begin(t.io, 1));
++    try t.expect(capture.begin(t.io, 2));
++    capture.complete(t.io, 1, 1, 1, 4, &.{ 1, 2, 3, 4 });
++    capture.fail(t.io, 1);
++    capture.cancel(t.io, 1);
++    try t.expect(capture.pending(t.io, 2));
++    var frame: Frame = .{};
++    try t.expectEqual(@as(c_int, -1), capture.read(t.io, 1, &frame));
++    try t.expect(capture.pending(t.io, 2));
++    capture.fail(t.io, 2);
++    try t.expectEqual(@as(c_int, -1), capture.read(t.io, 2, &frame));
++    try t.expect(capture.begin(t.io, 3));
++}
++
++test "malformed and over-bound frames fail without retaining allocations" {
++    const t = std.testing;
++    var capture: FrameCapture = .{ .allocator = t.allocator };
++    defer capture.deinit(t.io);
++    const cases = [_][3]usize{
++        .{ 0, 1, 4 },                                                     .{ maximum_dimension + 1, 1, 4 },
++        .{ maximum_dimension, maximum_dimension, maximum_dimension * 4 }, .{ 1, 1, 3 },
++        .{ 1, 2, std.math.maxInt(usize) },                                .{ 1, 2, 4 },
++    };
++    for (cases, 1..) |c, request| {
++        try t.expect(capture.begin(t.io, request));
++        capture.complete(t.io, request, c[0], c[1], c[2], &.{ 1, 2, 3, 4 });
++        var frame: Frame = .{};
++        try t.expectEqual(@as(c_int, -1), capture.read(t.io, request, &frame));
++        try t.expect(frame.pixels == null);
++    }
++}
++
++test "ready capture cancellation frees retained pixels" {
++    const t = std.testing;
++    var capture: FrameCapture = .{ .allocator = t.allocator };
++    defer capture.deinit(t.io);
++    try t.expect(capture.begin(t.io, 1));
++    capture.complete(t.io, 1, 1, 1, 4, &.{ 1, 2, 3, 4 });
++    capture.cancel(t.io, 1);
++    try t.expect(capture.begin(t.io, 2));
++}

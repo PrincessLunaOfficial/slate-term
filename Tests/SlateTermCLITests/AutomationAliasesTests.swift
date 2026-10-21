@@ -176,3 +176,13 @@ import SlateTermCore
         #expect(throws: (any Error).self) { try TerminalCommand.parse(args) }
     }
 }
+
+@Test func terminalFrameCLIRequiresExplicitIdentityBeforeConnecting() throws {
+    for args in [["frame"], ["frame", "--pane", "p1"],
+                 ["frame", "--pane", "p1", "--session-id", "s"],
+                 ["frame", "--pane", "p1", "--session-id", "s", "--expected-instance-id", "e", "--active"],
+                 ["frame", "--pane", "p1", "--session-id", "s", "--expected-instance-id", "e", "--text", "x"]] {
+        let command = try TerminalCommand.parse(args + ["--socket", "/tmp/slate-must-not-connect.sock"])
+        #expect(throws: ValidationError.self) { try command.run() }
+    }
+}

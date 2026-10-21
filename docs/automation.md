@@ -306,3 +306,51 @@ CLI equivalents include `web dialog`, `web respond-dialog --dialog-id ID
 --download-id ID --path /absolute/new-file`, `browser cancel-download`,
 `browser show-downloads`, `browser popups`, and `browser close-popup --popup-id ID`.
 All require the owning `--pane`; optional `--popup-id` selects a descendant view.
+
+
+## Authoritative terminal frames
+
+`terminal.frame` returns a bounded PNG of the terminal's current native viewport,
+including native font rendering, ANSI styles, selection/cursor and renderer images.
+It does not include AppKit pane headers, tabs or application chrome. Unlike
+`terminal.capture`, this is not a text projection and it follows the native scroll
+position. It never focuses a pane, resizes the PTY, changes occlusion, or captures
+the macOS screen.
+
+Every caller must supply **all three** explicit identity fields:
+
+```sh
+export SLATE_TERM_ACTOR=codex
+slate-term terminal frame --pane p1 --session-id SESSION --expected-instance-id APP --json
+```
+
+The socket method, `workspace.terminal.frame(params)`, generated
+`workspace.rpc["terminal.frame"]` and services share the same operation. Registered
+main-frame bridge restrictions remain unchanged. There is no parameterless native
+menu/picker action because capture needs a caller-owned output consumer.
+
+Result fields: `paneId`, `sessionId`, `appInstanceId`, `requestId`, `frameId`,
+`contentHash`, `mimeType: "image/png"`, `colorSpace: "Display P3"`, `pngBase64`,
+`pixelWidth`, `pixelHeight`, `pointWidth`, `pointHeight`, `observedAtMillis` and
+`freshness: "renderedForRequest"`. Frame/content hashes are SHA-256 of the PNG,
+not workspace revisions. The observation time is when the host read this result;
+it is not a claim about the content's last modification. Requests queue an update
+from terminal state and an explicit GPU render, then copy BGRA pixels after completion and before the
+render target can be reused. Display-link pulses are not required. The existing
+native viewport, scale and color profile are preserved; clients can pan/zoom the
+image without pretending that reflow is the original terminal presentation.
+
+Limits: 8192 pixels per dimension, 32 MiB owned raw pixels, 512 KiB PNG (base64 and
+metadata are also checked against a 900,000-byte encoded result bound), one capture per terminal, four app-wide,
+and a 2000 ms rendering deadline. Oversized frames fail; they are never silently
+resized or converted to lossy text. A detached/hidden or unrealized renderer,
+replacement, concurrent capture, failed GPU render or changing geometry fails
+with `-32022` and an explanatory `data.availability`. A deadline fails with
+`-32024`, availability `frameTimeout`. No old cached frame is returned on failure.
+Cancellation retires only its own renderer request. Pixel encoding runs off the
+main/render threads on immutable owned bytes.
+
+The implementation bypasses visibility/vsync scheduling for this explicit render
+request, but a realized attached surface is still required. Locked-Mac behavior,
+GPU failure/rapid resize races, and visual fidelity need the native fixture;
+package tests/builds alone do not establish these results.

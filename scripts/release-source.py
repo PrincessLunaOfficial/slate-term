@@ -126,12 +126,14 @@ class SourceArchive:
 
     def git_tree(self, directory, prefix="", overrides=None):
         overrides = overrides or {}
+        included = set()
         for entry in git(directory, "ls-tree", "-rz", "--full-tree", "HEAD").split(b"\0"):
             if not entry:
                 continue
             metadata, raw_name = entry.split(b"\t", 1)
             mode, kind, object_id = metadata.decode().split()
             name = safe_name(raw_name.decode())
+            included.add(name)
             require(kind == "blob", "Submodule source must be included explicitly")
             data = overrides.get(name)
             if data is None:
@@ -142,6 +144,11 @@ class SourceArchive:
                 self.add(str(PurePosixPath(prefix) / name), b"", 0o777, target)
             else:
                 self.add(str(PurePosixPath(prefix) / name), data, 0o755 if mode == "100755" else 0o644)
+
+        # Approved dependency patches can introduce source files absent in the
+        # pinned Git tree. Include only the caller's verified replacements.
+        for name in sorted(set(overrides) - included):
+            self.add(str(PurePosixPath(prefix) / safe_name(name)), overrides[name], 0o644)
 
     def directory(self, directory, prefix):
         for path in sorted(directory.rglob("*")):
@@ -251,13 +258,20 @@ def verified_ghostty(root, receipt):
     approved = {
         "src/build/SharedDeps.zig": ("ghostty-optional-libintl.patch", "patched_sha", "patch_sha"),
         "src/termio/Exec.zig": ("ghostty-bounded-shutdown.patch", "shutdown_patched_sha", "shutdown_patch_sha"),
-        "include/ghostty.h": ("ghostty-restored-output.patch", "output_header_patched_sha", "output_patch_sha"),
-        "src/apprt/embedded.zig": ("ghostty-restored-output.patch", "output_embedded_patched_sha", "output_patch_sha"),
+        "include/ghostty.h": ("ghostty-terminal-frame.patch", "frame_header_patched_sha", "frame_patch_sha"),
+        "src/apprt/embedded.zig": ("ghostty-terminal-frame.patch", "frame_embedded_patched_sha", "frame_patch_sha"),
         "src/Surface.zig": ("ghostty-restored-output.patch", "output_surface_patched_sha", "output_patch_sha"),
         "src/termio/Options.zig": ("ghostty-restored-output.patch", "output_options_patched_sha", "output_patch_sha"),
         "src/termio/Termio.zig": ("ghostty-restored-output.patch", "output_termio_patched_sha", "output_patch_sha"),
+        "src/renderer/Metal.zig": ("ghostty-terminal-frame.patch", "frame_metal_patched_sha", "frame_patch_sha"),
+        "src/renderer/Thread.zig": ("ghostty-terminal-frame.patch", "frame_thread_patched_sha", "frame_patch_sha"),
+        "src/renderer/generic.zig": ("ghostty-terminal-frame.patch", "frame_generic_patched_sha", "frame_patch_sha"),
+        "src/renderer/message.zig": ("ghostty-terminal-frame.patch", "frame_message_patched_sha", "frame_patch_sha"),
+        "src/renderer/metal/Frame.zig": ("ghostty-terminal-frame.patch", "frame_completion_patched_sha", "frame_patch_sha"),
+        "src/renderer/FrameCapture.zig": ("ghostty-terminal-frame.patch", "frame_capture_patched_sha", "frame_patch_sha"),
     }
-    require(sorted(changes) == sorted(approved), "Ghostty must contain only the approved patches")
+    introduced = {"src/renderer/FrameCapture.zig"}
+    require(sorted(changes) == sorted(set(approved) - introduced), "Ghostty must contain only the approved patches")
     replacements = {}
     for target, (patch_name, content_pin, patch_pin) in approved.items():
         data = (ghostty / target).read_bytes()

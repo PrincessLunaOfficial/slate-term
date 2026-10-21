@@ -1,5 +1,36 @@
 # API extension implementation progress
 
+## Terminal frame bridge — implemented; native verification pending
+
+Branch `feature/ironclaw-presentation` adds the authoritative `terminal.frame`
+read through the public catalog, CLI, registered page SDK and service socket.
+The pinned Ghostty patch queues a request on the renderer thread, updates cells
+and explicitly draws, then copies only that request's GPU-completed BGRA pixels
+before the ring slot is released. Cancellation, monotonically increasing request
+identities and owned buffers prevent stale-token reuse and borrowed IOSurface
+races. The host rechecks app/pane/session/surface/geometry after waits and encoding.
+
+No focus, native visibility, PTY size or macOS capture permissions are changed.
+Original pixels carry the Display P3 profile. Native pane headers are not in this
+terminal image; consumers must use workspace metadata for their navigation.
+Unavailable, oversized, timed-out and changed captures return explicit errors.
+
+Verification: the new public-method/guard test failed on baseline `3f087a7` because
+`terminal.frame` was absent, then passed with unchanged assertions. An isolated
+worktree at `3f087a79fc9313859fb896b0091156bf182b4c8f` reproduced
+`swift test --jobs 4 --filter terminalFrameIsPublicReadWithExplicitLifetimeGuards`
+with exit 1 (method absent); the same assertion passed on the implementation with
+exit 0. All 554 Swift package tests passed, including exact BGRA → PNG → BGRA pixels, request/schema
+agreement and CLI aliases. The new source-archive regression first failed because
+an introduced patch file was omitted; it then passed, with 121 release-tooling
+tests (four optional skips). All 72 VM-runner tests and four pure Ghostty ownership/generation tests passed.
+The pinned Ghostty framework and native app builds passed, with clean patch replay
+and corresponding-source verification for all 13 dependency source files. Native gate
+`terminal-frame` is registered but **not run**. Locked/unlocked display behavior,
+concurrent resize/session replacement, actual renderer images and visual parity
+must be verified in the VM (or separately explicitly authorized host fixture).
+No native integration pass or complete mobile UI parity is claimed.
+
 ## Previous-output simplification
 
 Removed the separate viewer, pane-header action, Show/Clear commands, and

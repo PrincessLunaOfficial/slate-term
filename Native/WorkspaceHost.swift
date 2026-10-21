@@ -962,6 +962,7 @@ final class WorkspaceHost: NSObject, NSWindowDelegate, NSMenuDelegate, NSMenuIte
            !Set(params.keys).intersection(APIGuards.names).isSubset(of: ["expectedInstanceId"]) {
             throw RPCFailure(code: -32602, message: "Operation handles accept only the expectedInstanceId guard, not live-pane guards")
         }
+        if contract == .terminalFrame { _ = try TerminalFrameRequest(params) }
         try validateAPIGuards(params, method: method)
         let client = caller ?? AutomationCaller(origin: .administrative, audience: operations.administrativeAudience)
         let operation = try suppliedOperation ?? client.admit(method, metadata: metadata, through: operations)
@@ -1088,6 +1089,13 @@ final class WorkspaceHost: NSObject, NSWindowDelegate, NSMenuDelegate, NSMenuIte
         if contract?.family == .terminalOperations {
             return try await terminalControl.callOperation(String(method.dropFirst("terminal.".count)),
                 params: withoutAPIGuards(params), validateCaller: operation.validateCaller)
+        }
+        if contract == .terminalFrame {
+            let request = try TerminalFrameRequest(params)
+            return try await terminalControl.frame(request, validateCaller: {
+                try operation.validateCaller()
+                try self.validateAPIGuards(params, method: method)
+            })
         }
         if contract?.family == .terminal {
             let pane = try terminalPane(params)
@@ -1620,7 +1628,7 @@ final class WorkspaceHost: NSObject, NSWindowDelegate, NSMenuDelegate, NSMenuIte
         case .notificationsPost, .notificationsList, .notificationsDismiss, .notificationsStatus,
              .layoutConfiguration, .contextInspect, .settingsGet, .pluginDataGet, .pluginDataPatch, .pluginDataReset,
              .panelStateGet, .panelStatePatch, .panelStateReset, .paneTitle,
-             .terminalSend, .terminalKey, .terminalCapture, .terminalRun, .terminalWait, .terminalStart, .terminalSearch,
+             .terminalSend, .terminalKey, .terminalCapture, .terminalFrame, .terminalRun, .terminalWait, .terminalStart, .terminalSearch,
              .terminalOperations, .terminalOperationStatus, .terminalOperationResult, .terminalOperationWait,
              .eventsHead, .eventsPoll, .eventsEmit, .pluginsRestart,
              .webGet, .webSnapshot, .webClick, .webFill, .webSelect, .webScroll, .webWait, .webFocus, .webKey, .webCheck, .webSetValue, .webDialog, .webRespondDialog, .webFileChooser, .webChooseFiles, .webCancelFileChooser, .webScreenshot,

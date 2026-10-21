@@ -500,6 +500,7 @@ final class PluginPane: NSViewController, WKNavigationDelegate, WKUIDelegate, WK
             start:(command,params={},options={})=>call('terminal.start',{...params,command},options),
             send:(text,params={},options={})=>call('terminal.send',{...params,text},options),
             capture:(params={})=>call('terminal.capture',params),
+            frame:(params)=>call('terminal.frame',params),
             search:(params={},options={})=>call('terminal.search',params,options),
             key:(key,params={},options={})=>call('terminal.key',{...params,key},options),
             run:(command,params={},options={})=>call('terminal.run',{...params,command},options),

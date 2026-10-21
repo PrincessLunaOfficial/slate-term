@@ -173,6 +173,14 @@ public enum AutomationCapabilities {
                 "errors": .object(["invalid": .integer(-32602), "unavailableHandle": .integer(APIError.unavailable),
                     "waitTimeout": .integer(-32024), "notReadyOrFailed": .integer(-32042)])
             ]),
+            "terminalFrame": .object([
+                "version": .integer(1), "method": .string("terminal.frame"),
+                "required": .array(["pane", "sessionId", "expectedInstanceId"].map(JSONValue.string)),
+                "format": .string("image/png"), "freshness": .string("renderedForRequest"),
+                "maximumPNGBytes": .integer(TerminalFrameLimits.maximumPNGBytes),
+                "maximumPixelBytes": .integer(TerminalFrameLimits.maximumPixelBytes),
+                "nativeChromeIncluded": .bool(false), "focusAndSizePreserved": .bool(true)
+            ]),
             "terminalSearch": .object([
                 "version": .integer(1), "method": .string("terminal.search"),
                 "actions": .array(["get", "set", "next", "previous", "end"].map(JSONValue.string)),

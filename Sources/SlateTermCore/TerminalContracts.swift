@@ -60,6 +60,32 @@ extension AutomationContracts {
                 constraints: [.object(["not": .object(["required": .array([.string("contains"), .string("afterSequence")])])])],
                 semantics: ["outputCondition": .string("literalActiveScreenMayMatchExistingText"), "timeoutStopsExecution": .bool(false)])
         ]
+        let frameFields = identity.merging([
+            "appInstanceId": S.string(minimumLength: 1), "requestId": S.uuid,
+            "frameId": S.string(pattern: "^[a-f0-9]{64}$"), "contentHash": S.string(pattern: "^[a-f0-9]{64}$"),
+            "mimeType": S.constant(.string("image/png")), "colorSpace": S.constant(.string("Display P3")),
+            "pngBase64": S.string(minimumLength: 1, maximumUTF8Bytes: TerminalFrameLimits.maximumBase64Bytes),
+            "pixelWidth": S.integer(minimum: 1, maximum: TerminalFrameLimits.maximumPixelDimension),
+            "pixelHeight": S.integer(minimum: 1, maximum: TerminalFrameLimits.maximumPixelDimension),
+            "pointWidth": S.number, "pointHeight": S.number,
+            "observedAtMillis": S.integer(minimum: 0), "freshness": S.constant(.string("renderedForRequest"))
+        ]) { _, value in value }
+        methods[.terminalFrame] = AutomationContract(parameters: [
+            "pane": S.paneID, "sessionId": S.string(minimumLength: 1, maximumUTF8Bytes: 256)
+        ], required: ["pane", "sessionId", "expectedInstanceId"],
+            result: S.object(frameFields, required: Array(frameFields.keys)), guards: ["expectedInstanceId"],
+            conditions: live + [.object(["requires": .string("attachedRealizedMetalSurface")])],
+            routing: "explicitTerminalSession", errors: [-32024], semantics: [
+                "freshness": .string("renderedForRequest"), "changesFocusOrGeometry": .bool(false),
+                "pixels": .string("ownedGPUCompletedBGRAEncodedAsDisplayP3PNG"),
+                "viewport": .string("currentNativeViewportIncludingScrollPosition"),
+                "frameId": .string("sha256OfPNGNotLayoutRevision"),
+                "observedAtMillis": .string("hostReadTimeNotContentModificationTime"),
+                "maximumPNGBytes": .integer(TerminalFrameLimits.maximumPNGBytes),
+                "maximumEncodedResultBytes": .integer(TerminalFrameLimits.maximumEncodedResultBytes),
+                "deadlineMilliseconds": .integer(TerminalFrameLimits.timeoutMilliseconds),
+                "overlap": .string("oneCapturePerTerminalBusyFails"), "nativeChromeIncluded": .bool(false)
+            ])
         methods[.terminalSearch] = terminal([
             "action": S.defaulted(S.strings(TerminalSearchRequest.Action.allCases.map(\.rawValue)), .string("get")),
             "query": S.string(maximumUTF8Bytes: 4_096, pattern: "^[^\\u0000]*(?![\\s\\S])")

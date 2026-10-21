@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import CoreGraphics
 import SlateTermCore
 
 /// Generic terminal I/O and authenticated shell completion. Tool-specific protocols live in extensions.
@@ -15,6 +17,7 @@ final class TerminalControl {
     private let runs = TerminalRuns()
     private var waits = Set<UUID>()
     private var closed = false
+    private var pendingFrames = 0
     var pendingRuns: Int { runs.pendingCount }
     var pendingWaits: Int { waits.count + runs.waitingCount }
     func displayCommand(pane: PaneID) -> String? { runs.displayCommand(pane: pane) }
@@ -64,6 +67,71 @@ final class TerminalControl {
             default: throw RPCFailure(code: -32601, message: "Unknown terminal operation action")
             }
         } catch let error as TerminalRunError { throw Self.failure(error) }
+    }
+
+    func frame(_ request: TerminalFrameRequest,
+               validateCaller: @escaping @MainActor () throws -> Void) async throws -> JSONValue {
+        try Task.checkCancellation()
+        try validateCaller()
+        guard pendingFrames < 4 else { throw TerminalFrameLimits.unavailable("captureCapacity") }
+        guard !closed, let target = lookup(request.pane), target.sessionID == request.sessionID else {
+            throw TerminalFrameLimits.unavailable("sessionReplaced")
+        }
+        let view = target.view
+        let surface = view.surfaceIdentity
+        let bounds = view.bounds
+        let pixelSize = view.pixelSize
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(TerminalFrameLimits.timeoutMilliseconds))
+        let token = try view.beginFrameCapture()
+        pendingFrames += 1
+        defer { pendingFrames -= 1; view.endFrameCapture(token) }
+        func validate() throws {
+            try Task.checkCancellation()
+            try validateCaller()
+            try view.validateFrameCapture(token)
+            guard !closed, let current = lookup(request.pane), current.sessionID == request.sessionID,
+                  current.view === view, view.surfaceIdentity == surface else {
+                throw TerminalFrameLimits.unavailable("sessionReplaced")
+            }
+            guard view.bounds == bounds, view.pixelSize == pixelSize,
+                  view.window != nil, !view.isHiddenOrHasHiddenAncestor else {
+                throw TerminalFrameLimits.unavailable("geometryChanged")
+            }
+            guard ContinuousClock.now < deadline else {
+                throw RPCFailure(code: -32024, message: "Terminal frame deadline expired",
+                    data: .object(["availability": .string("frameTimeout")]))
+            }
+        }
+        while true {
+            try validate()
+            if let pixels = try view.readFrameCapture(token) {
+                guard pixels.width == Int(pixelSize.width), pixels.height == Int(pixelSize.height) else {
+                    throw TerminalFrameLimits.unavailable("geometryChanged")
+                }
+                // The buffer is owned and immutable. PNG encoding must not stall
+                // native input or the renderer's frame completion callback.
+                let png = try await Task.detached(priority: .userInitiated) { try pixels.png() }.value
+                try validate()
+                let result = JSONValue.object([
+                    "paneId": .string(request.pane.description), "sessionId": .string(request.sessionID),
+                    "appInstanceId": .string(request.appInstanceID), "requestId": .string(UUID().uuidString),
+                    "frameId": .string(png.contentHash), "contentHash": .string(png.contentHash),
+                    "mimeType": .string("image/png"), "colorSpace": .string("Display P3"),
+                    "pngBase64": .string(png.data.base64EncodedString()),
+                    "pixelWidth": .integer(pixels.width), "pixelHeight": .integer(pixels.height),
+                    "pointWidth": .number(bounds.width), "pointHeight": .number(bounds.height),
+                    "observedAtMillis": .integer(Int(Date().timeIntervalSince1970 * 1_000)),
+                    "freshness": .string("renderedForRequest")
+                ])
+                // JSONEncoder may escape base64 slashes. Check actual wire
+                // bytes as well as PNG length; leave room for the RPC envelope.
+                guard try JSONEncoder().encode(result).count <= TerminalFrameLimits.maximumEncodedResultBytes else {
+                    throw TerminalFrameLimits.unavailable("encodedFrameTooLarge")
+                }
+                return result
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private static func failure(_ error: TerminalRunError) -> RPCFailure {

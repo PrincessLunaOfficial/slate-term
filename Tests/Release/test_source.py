@@ -68,6 +68,15 @@ class SourceTests(unittest.TestCase):
         self.assertNotIn("sparkle", package.read_text())
         self.assertTrue((self.root / ".build/bootstrap/ghostty").is_symlink())
 
+    def test_source_export_includes_verified_new_patch_files(self):
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as tar:
+            archive = source.SourceArchive(tar, "fixture")
+            archive.git_tree(self.root, "vendor/ghostty", {"src/renderer/FrameCapture.zig": b"owned frame fixture\n"})
+        stream.seek(0)
+        with tarfile.open(fileobj=stream) as tar:
+            self.assertEqual(tar.extractfile("fixture/vendor/ghostty/src/renderer/FrameCapture.zig").read(), b"owned frame fixture\n")
+
     def test_build_receipt_binds_clean_commit_version_and_app(self):
         self.assertEqual(self.verify(), self.receipt)
         (self.app / "Contents/modified").write_text("changed")
