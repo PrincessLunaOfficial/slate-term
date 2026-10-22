@@ -99,8 +99,6 @@ def embed(app, products):
         if not source_tool.is_file():
             raise ValueError(f'Missing executable helper: {source_tool}')
         shutil.copy2(source_tool, helpers / name)
-        # Debug linkers include build directories before the runtime's private dependencies.
-        remove_build_rpaths(helpers / name)
         add_rpath(helpers / name, '@executable_path/../Frameworks')
     add_rpath(version / 'SlateRuntime', '@loader_path/Frameworks')
     # Follow the actual linked dependency closure, including helper-only dependencies.
@@ -121,7 +119,12 @@ def embed(app, products):
     for resource in products.glob('*.bundle'):
         copy_bundle(resource, version / 'Resources' / resource.name)
     check_internal_links(runtime)
-    # Helpers receive a new load command; the linker signature is now stale.
+    # Debug binaries can search build directories before their private dependencies.
+    # Sanitize the complete payload, including transitive frameworks and resources,
+    # so moving the app never makes dyld consult the original checkout.
+    for binary in macho_files(runtime):
+        remove_build_rpaths(binary)
+    # Changed load commands invalidate the linker signatures.
     sign_runtime(runtime, '-')
     validate(app)
 

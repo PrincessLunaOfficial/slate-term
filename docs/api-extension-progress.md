@@ -1,6 +1,6 @@
 # API extension implementation progress
 
-## Guarded terminal interaction — implemented; native verification pending
+## Guarded terminal interaction — selected locked-host acceptance passed
 
 Added `terminal.scroll`, `terminal.pointer` and `terminal.selection` to the shared
 catalog, CLI, registered page aliases and service dispatch. Each requires explicit
@@ -22,12 +22,17 @@ implementation. All 562 package tests passed, covering input bounds/unknown fiel
 geometry-before-dispatch, atomic release/cleanup, stale physical modifiers, bounded
 selection/result schemas, no inherited targets and CLI/page catalog aliases. The
 native app build passed. A read-only engine/native-source audit found and verified
-the modifier cleanup fix. Python syntax validation passed for the expanded VM-only
-`terminal-frame` fixture, but that fixture has **not run**. Actual scrolling,
-selection, pointer effects, physical-mouse contention and locked-Mac behavior remain
-pending native evidence. No running app/windows were restarted or given input.
+the modifier cleanup fix. Following explicit user authorization on 2026-10-22, the
+isolated `terminal-frame` fixture passed on the host while macOS remained locked.
+It created only temporary owned state/windows/PTYs. A 200-line native-history wheel
+round-trip changed the PNG and restored the exact original pixels with the cursor
+hidden; an atomic drag produced native selected text. CLI/registered-page parity,
+malformed coordinates, stale geometry/session/app guards and ordinary-page bridge
+denial passed. Fixture teardown left the pre-existing Slate/Ghostty/tmux processes
+untouched. Physical-mouse contention, concurrent resize and lock transitions still
+need separate coverage; this is selected acceptance, not a full native suite.
 
-## Terminal frame bridge — implemented; native verification pending
+## Terminal frame bridge — selected locked-host acceptance passed
 
 Branch `feature/ironclaw-presentation` adds the authoritative `terminal.frame`
 read through the public catalog, CLI, registered page SDK and service socket.
@@ -52,11 +57,27 @@ agreement and CLI aliases. The new source-archive regression first failed becaus
 an introduced patch file was omitted; it then passed, with 121 release-tooling
 tests (four optional skips). All 72 VM-runner tests and four pure Ghostty ownership/generation tests passed.
 The pinned Ghostty framework and native app builds passed, with clean patch replay
-and corresponding-source verification for all 13 dependency source files. Native gate
-`terminal-frame` is registered but **not run**. Locked/unlocked display behavior,
-concurrent resize/session replacement, actual renderer images and visual parity
-must be verified in the VM (or separately explicitly authorized host fixture).
-No native integration pass or complete mobile UI parity is claimed.
+and corresponding-source verification for all 13 dependency source files.
+On 2026-10-22 the explicitly authorized isolated host `terminal-frame` gate passed
+against application source `e4c3046` while the console was locked before and after.
+Fresh 2000×1244 PNGs changed after new terminal output; the recorded artifact shows
+ANSI backgrounds, Japanese text and emoji. Replaced-session/stale-app failures,
+CLI/page parity and changed pane geometry were exercised. No desktop unlock or
+screen recording was used. This does not establish complete mobile UI parity,
+unlocked/lock-transition behavior, concurrent-resize/GPU-failure races or all image
+protocols. Logs and fixture PNGs are in `artifacts/terminal-frame*`.
+
+A separate owned browser acceptance check also passed under the same locked state:
+`web.get`, guarded DOM snapshots and `web.screenshot` after two navigations returned
+2000×1122 PNGs with exact expected corner RGB samples (18,52,86 then 86,18,52).
+The document identity rotated while view identity remained stable; stale guards
+prevented output-file creation, native snapshot bounds matched the DOM viewport
+at scale 2, password values stayed absent from DOM results and ordinary pages had
+no bridge. Evidence and the reproducible narrow fixture are
+`artifacts/web-mobile-locked-{first,second}.png`,
+`artifacts/web-mobile-locked-summary.json`,
+`artifacts/web-mobile-locked-check.py` and `artifacts/native-mobile-acceptance.json`.
+No app implementation changes or rebuild were needed for this acceptance pass.
 
 ## Previous-output simplification
 

@@ -64,8 +64,19 @@ with AppFixture('terminal-frame') as app:
     before = app.rpc('workspace.snapshot')
     dispatch = app.rpc('terminal.pointer', **(interaction | dict(action='move')))
     assert dispatch == dict(paneId='p1', sessionId=session, appInstanceId=epoch, delivery='dispatched')
-    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=1)))
-    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=-1)))
+    # Create enough retained rows for real scrolling. Hide the cursor so a blink
+    # cannot masquerade as changed viewport pixels; round-trip must be exact.
+    app.rpc('terminal.run', pane='p1', command="printf '\\033[?25l'; for i in {1..200}; do printf 'SCROLL_FIXTURE_%03d\\n' $i; done")
+    bottom = frame()
+    interaction['geometry'] = geometry(bottom)
+    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=100)))
+    top = frame()
+    assert top['contentHash'] != bottom['contentHash'], 'Wheel up did not change the native viewport'
+    app.rpc('terminal.scroll', **(interaction | dict(deltaX=0, deltaY=-100)))
+    restored = frame()
+    assert restored['contentHash'] == bottom['contentHash'], 'Wheel down did not restore exact bottom pixels'
+    (ROOT / 'artifacts/terminal-frame-history-top.png').write_bytes(verify(top))
+    (ROOT / 'artifacts/terminal-frame-history-bottom.png').write_bytes(verify(bottom))
     after = app.rpc('workspace.snapshot')
     assert before['workspaceRevision'] == after['workspaceRevision'], 'Interaction implicitly changed workspace/focus'
     app.rpc('terminal.run', pane='p1', command="printf '\\033[H\\033[2JSELECTION_FIXTURE_NATIVE_TEXT\\n'")
@@ -98,4 +109,4 @@ with AppFixture('terminal-frame') as app:
     app.rpc('command.run', id='pane.type', pane='p1', type='terminal', force=True)
     frame(error=-32022)
 
-print('PASS terminal frame PNG, changed output, explicit epochs/sessions, CLI/page API parity')
+print('PASS terminal frame PNG, changed output, exact history scroll round-trip, native selection, lifetime/geometry guards and CLI/page parity')

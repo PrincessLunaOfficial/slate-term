@@ -351,9 +351,11 @@ Cancellation retires only its own renderer request. Pixel encoding runs off the
 main/render threads on immutable owned bytes.
 
 The implementation bypasses visibility/vsync scheduling for this explicit render
-request, but a realized attached surface is still required. Locked-Mac behavior,
-GPU failure/rapid resize races, and visual fidelity need the native fixture;
-package tests/builds alone do not establish these results.
+request, but a realized attached surface is still required. An explicitly authorized
+isolated host fixture passed with macOS locked, including fresh output, identity
+failures and exact history-scroll pixels. GPU failure/rapid resize races, lock
+transitions and full visual parity require further evidence; package tests/builds
+alone do not establish native behavior.
 
 ## Guarded terminal pointer, wheel and selection
 
@@ -424,4 +426,6 @@ slate-term terminal selection --pane p1 --session-id SESSION --expected-instance
 The VM-only `terminal-frame` fixture includes coordinate guards, native gestures,
 selection and CLI/page parity. Host unit tests/builds do not establish actual
 selection, scroll direction under native configuration, locked-Mac input or
-physical-device behavior; that native fixture remains pending until run.
+physical-device behavior. The explicitly authorized isolated host fixture passed
+under macOS lock on 2026-10-22, including exact history-scroll pixels and native
+selection. Physical-mouse contention and lock/resize transitions remain untested.

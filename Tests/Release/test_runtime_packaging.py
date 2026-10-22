@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import plistlib
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -27,6 +28,67 @@ class RuntimePackagingTests(unittest.TestCase):
             mock.call('otool', '-l', binary),
             mock.call('install_name_tool', '-delete_rpath', paths[2], binary),
         ])
+
+    def test_embedded_dependency_closure_has_no_build_rpaths_before_signing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            products = root / 'Build Products/Debug'
+            app = root / 'Installed.app'
+            runtime = packaging.runtime_path(app)
+            binaries = {
+                packaging.RUNTIME_NAME + '/Versions/A/SlateRuntime': ['Core.framework'],
+                'PackageFrameworks/Core.framework/Versions/A/Core': ['Nested.framework'],
+                'PackageFrameworks/Nested.framework/Versions/A/Nested': [],
+                'PackageFrameworks/HelperOnly.framework/Versions/A/HelperOnly': [],
+                'Resources.bundle/Contents/MacOS/ResourceCode': [],
+                'slate-term': ['HelperOnly.framework'],
+                'slate-layout-launcher': [],
+            }
+            dependencies = {}
+            for relative, linked in binaries.items():
+                binary = products / relative
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_bytes(b'\xcf\xfa\xed\xfe' + b'fixture')
+                dependencies[binary.name] = linked
+            (products / packaging.RUNTIME_NAME / 'Versions/A/Resources').mkdir()
+            (products / packaging.RUNTIME_NAME / 'Versions/Current').symlink_to('A')
+            build_path = str(products / 'PackageFrameworks')
+            removed = set()
+            signed = []
+
+            def inspect(*args):
+                if args[0] == 'ditto':
+                    shutil.copytree(args[1], args[2], symlinks=True)
+                    return ''
+                if args[:2] == ('otool', '-L'):
+                    return '\n'.join('    @rpath/' + name + '/Versions/A/' + name[:-10]
+                                     for name in dependencies[args[2].name])
+                if args[:2] == ('otool', '-l'):
+                    paths = ['/usr/lib/swift', '@executable_path/../Frameworks', '@loader_path/Frameworks']
+                    if args[2] not in removed:
+                        paths.append(build_path)
+                    return '\n'.join(f'cmd LC_RPATH\ncmdsize 80\npath {path} (offset 12)' for path in paths)
+                if args[:2] == ('install_name_tool', '-delete_rpath'):
+                    self.assertEqual(args[2], build_path)
+                    self.assertTrue(args[3].is_relative_to(runtime), 'Never modify build products')
+                    removed.add(args[3])
+                    return ''
+                self.fail(f'Unexpected packaging command: {args}')
+
+            def sign(payload, identity):
+                embedded = packaging.macho_files(payload)
+                self.assertCountEqual([path.name for path in embedded], dependencies.keys())
+                self.assertEqual(set(embedded), removed,
+                                 'Every embedded binary must resolve privately before signing')
+                self.assertEqual(identity, '-')
+                signed.append(payload)
+
+            with mock.patch.object(packaging, 'run', side_effect=inspect), \
+                 mock.patch.object(packaging, 'sign_runtime', side_effect=sign), \
+                 mock.patch.object(packaging, 'validate') as validate:
+                packaging.embed(app, products)
+            self.assertEqual(signed, [runtime])
+            validate.assert_called_once_with(app)
 
     def test_dependency_inventory_uses_complete_framework_names(self):
         commands = '''/tmp/Runtime:
