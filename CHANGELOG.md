@@ -18,6 +18,8 @@ Detailed change record for agents and maintainers. Public release notes live in 
 
 ### Internal
 
+- Ignore `.local-release/` app bundles, archives and checksums so locally downloaded or assembled release artifacts do not appear as source changes in Git or the Git panel.
+
 - Strengthen `terminal-frame` acceptance with a 200-line wheel up/down round-trip whose restored PNG must match exactly (cursor hidden to exclude blink). An authorized isolated locked-host run passed without changing existing app/session processes. A separate narrow browser check verified guarded snapshots and nonblank, exact-color PNGs across document navigation, native viewport bounds and stale-document rejection; no application code/rebuild was needed.
 
 - Pin the terminal-frame Ghostty patch and include its new source in dependency receipts and corresponding-source archives. Add a VM-only terminal-frame integration gate. Host validation: four pure Ghostty ownership/generation tests, 554 Swift package tests, 72 VM-runner tests and 121 release-tooling tests (four optional tool checks skipped). The pinned Ghostty framework and native app build passed; these do not establish native rendering behavior.
